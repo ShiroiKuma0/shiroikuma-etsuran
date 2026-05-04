@@ -36,4 +36,20 @@
         <item quantity="one">%1$d kitap kütüphaneden kaldırıldı.</item>
         <item quantity="other">%1$d kitap kütüphaneden kaldırıldı.</item>
     </plurals>
+    <plurals name="search_matches_count">
+        <item quantity="one">%1$d eşleşme bulundu</item>
+        <item quantity="other">%1$d eşleşme bulundu</item>
+    </plurals>
+    <plurals name="folder_count">
+        <item quantity="one">%1$d klasör</item>
+        <item quantity="other">%1$d klasör</item>
+    </plurals>
+    <plurals name="tag_count">
+        <item quantity="one">%1$d etiket</item>
+        <item quantity="other">%1$d etiket</item>
+    </plurals>
+    <plurals name="tts_cache_chunk_count_parenthetical">
+        <item quantity="one">(%1$d yığın)</item>
+        <item quantity="other">(%1$d yığın)</item>
+    </plurals>
 </resources>
