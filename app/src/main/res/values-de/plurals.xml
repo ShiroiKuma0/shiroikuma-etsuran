@@ -36,4 +36,20 @@
         <item quantity="one">%1$d Buch aus der Bibliothek entfernt.</item>
         <item quantity="other">%1$d Bücher aus der Bibliothek entfernt.</item>
     </plurals>
+    <plurals name="search_matches_count">
+        <item quantity="one">%1$d Treffer gefunden</item>
+        <item quantity="other">%1$d Treffer gefunden</item>
+    </plurals>
+    <plurals name="folder_count">
+        <item quantity="one">%1$d Ordner</item>
+        <item quantity="other">%1$d Ordner</item>
+    </plurals>
+    <plurals name="tag_count">
+        <item quantity="one">%1$d Tag</item>
+        <item quantity="other">%1$d Tags</item>
+    </plurals>
+    <plurals name="tts_cache_chunk_count_parenthetical">
+        <item quantity="one">(%1$d Stück)</item>
+        <item quantity="other">(%1$d Stücke)</item>
+    </plurals>
 </resources>
