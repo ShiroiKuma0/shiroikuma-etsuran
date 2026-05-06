@@ -1,3 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <plurals name="book_count">
+        <item quantity="one">%1$d libro</item>
+        <item quantity="many">%1$d libros</item>
+        <item quantity="other">%1$d libros</item>
+    </plurals>
+    <plurals name="book_word">
+        <item quantity="one">libro</item>
+        <item quantity="many">libros</item>
+        <item quantity="other">libros</item>
+    </plurals>
+    <plurals name="shelf_count">
+        <item quantity="one">%1$d estantería</item>
+        <item quantity="many">%1$d estanterías</item>
+        <item quantity="other">%1$d estanterías</item>
+    </plurals>
+    <plurals name="search_results_count">
+        <item quantity="one">%1$d resultado encontrado</item>
+        <item quantity="many">%1$d resultados encontrados</item>
+        <item quantity="other">%1$d resultados encontrados</item>
+    </plurals>
 </resources>
