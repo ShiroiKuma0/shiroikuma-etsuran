@@ -43,7 +43,8 @@ class LibraryProjector {
                     timestamp = now + index,
                     title = file.name.substringBeforeLast('.'),
                     fileSize = file.size,
-                    sourceFolder = file.path?.parentPath()
+                    sourceFolder = file.sourceFolder ?: file.path?.parentPath(),
+                    isRecent = false
                 )
             }
         }
@@ -57,7 +58,7 @@ class LibraryProjector {
         return when (sortOrder) {
             SortOrder.RECENT -> books.sortedByDescending { it.timestamp }
             SortOrder.TITLE_ASC -> books.sortedBy { it.title?.lowercase() ?: it.displayName.lowercase() }
-            SortOrder.AUTHOR_ASC -> books.sortedBy { it.author?.lowercase() ?: "" }
+            SortOrder.AUTHOR_ASC -> books.sortedWith(compareBy(nullsLast()) { it.author?.lowercase() })
             SortOrder.PERCENT_ASC -> books.sortedBy { it.progressPercentage ?: 0f }
             SortOrder.PERCENT_DESC -> books.sortedByDescending { it.progressPercentage ?: 0f }
             SortOrder.SIZE_ASC -> books.sortedBy { it.fileSize }
@@ -79,7 +80,7 @@ class LibraryProjector {
     fun applyFilters(books: List<BookItem>, filters: LibraryFilters): List<BookItem> {
         return books.filter { book ->
             val matchesType = filters.fileTypes.isEmpty() || book.type in filters.fileTypes
-            val matchesFolder = filters.sourceFolders.isEmpty() || book.sourceFolder in filters.sourceFolders
+            val matchesFolder = book.matchesSourceFolders(filters.sourceFolders)
             val progress = book.progressPercentage ?: 0f
             val matchesStatus = when (filters.readStatus) {
                 ReadStatusFilter.ALL -> true
@@ -148,26 +149,12 @@ private fun String.folderDisplayName(): String {
 data class ImportedFile(
     val name: String,
     val path: String?,
-    val size: Long
+    val size: Long,
+    val sourceFolder: String? = null
 )
 
 expect fun currentTimestamp(): Long
 
 fun String.toFileType(): FileType {
-    return when (substringAfterLast('.', "").lowercase()) {
-        "pdf" -> FileType.PDF
-        "epub" -> FileType.EPUB
-        "mobi" -> FileType.MOBI
-        "md" -> FileType.MD
-        "txt" -> FileType.TXT
-        "html", "htm" -> FileType.HTML
-        "fb2" -> FileType.FB2
-        "cbz" -> FileType.CBZ
-        "cbr" -> FileType.CBR
-        "cb7" -> FileType.CB7
-        "docx" -> FileType.DOCX
-        "odt" -> FileType.ODT
-        "fodt" -> FileType.FODT
-        else -> FileType.UNKNOWN
-    }
+    return SharedFileCapabilities.fileTypeForName(this)
 }

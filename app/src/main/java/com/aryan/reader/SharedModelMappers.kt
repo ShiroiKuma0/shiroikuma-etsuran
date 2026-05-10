@@ -12,6 +12,7 @@ import com.aryan.reader.shared.BannerMessage as SharedBannerMessage
 import com.aryan.reader.shared.BookItem as SharedBookItem
 import com.aryan.reader.shared.BookShelfRef as SharedBookShelfRef
 import com.aryan.reader.shared.CustomAppTheme as SharedCustomAppTheme
+import com.aryan.reader.shared.EpubAnnotationSerializer
 import com.aryan.reader.shared.FileType as SharedFileType
 import com.aryan.reader.shared.LibraryFilters as SharedLibraryFilters
 import com.aryan.reader.shared.ReadStatusFilter as SharedReadStatusFilter
@@ -30,15 +31,18 @@ fun RecentFileItem.toSharedBookItem(): SharedBookItem {
         type = type.toSharedFileType(),
         displayName = customName ?: displayName,
         timestamp = timestamp,
+        coverImagePath = coverImagePath,
         title = title,
         author = author,
         progressPercentage = progressPercentage,
         isRecent = isRecent,
         fileSize = fileSize,
         sourceFolder = sourceFolderUri,
+        folderTextMetadataParsed = folderTextMetadataParsed,
         seriesName = seriesName,
         seriesIndex = seriesIndex,
-        tags = tags.map { it.toSharedTag() }
+        tags = tags.map { it.toSharedTag() },
+        readerHighlights = EpubAnnotationSerializer.parseHighlightsJson(highlightsJson)
     )
 }
 
@@ -50,12 +54,32 @@ fun TagEntity.toSharedTag(): SharedTag {
     )
 }
 
+fun SharedTag.toTagEntity(createdAt: Long): TagEntity {
+    return TagEntity(
+        id = id,
+        name = name,
+        color = color,
+        createdAt = createdAt
+    )
+}
+
 fun ShelfEntity.toSharedShelfRecord(): ShelfRecord {
     return ShelfRecord(
         id = id,
         name = name,
         isSmart = isSmart,
         smartRulesJson = smartRulesJson
+    )
+}
+
+fun ShelfRecord.toShelfEntity(createdAt: Long, updatedAt: Long = createdAt): ShelfEntity {
+    return ShelfEntity(
+        id = id,
+        name = name,
+        isSmart = isSmart,
+        smartRulesJson = smartRulesJson,
+        createdAt = createdAt,
+        updatedAt = updatedAt
     )
 }
 

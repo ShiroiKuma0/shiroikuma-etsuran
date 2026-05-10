@@ -1,6 +1,9 @@
 package com.aryan.reader.shared.reader
 
 import com.aryan.reader.paginatedreader.SemanticBlock
+import com.aryan.reader.shared.PageInfoMode
+import com.aryan.reader.shared.PageInfoPosition
+import com.aryan.reader.shared.SystemUiMode
 
 data class SharedEpubBook(
     val id: String,
@@ -20,10 +23,7 @@ data class SharedEpubChapter(
     val baseHref: String? = null
 )
 
-data class ReaderLocator(
-    val chapterIndex: Int = 0,
-    val charOffset: Int = 0
-)
+typealias ReaderLocator = com.aryan.reader.shared.ReaderLocator
 
 enum class ReaderReadingMode {
     PAGINATED,
@@ -44,8 +44,26 @@ data class ReaderSettings(
     val readingMode: ReaderReadingMode = ReaderReadingMode.PAGINATED,
     val textAlign: SharedReaderTextAlign = SharedReaderTextAlign.START,
     val pageWidth: Int = 760,
-    val fontFamily: String = "Default"
-)
+    val fontFamily: String = "Default",
+    val paragraphSpacing: Float = 1.0f,
+    val imageScale: Float = 1.0f,
+    val horizontalMargin: Int? = null,
+    val verticalMargin: Int? = null,
+    val themeId: String? = null,
+    val textureId: String? = null,
+    val textureAlpha: Float = 0.55f,
+    val customFontPath: String? = null,
+    val backgroundColorArgb: Long? = null,
+    val textColorArgb: Long? = null,
+    val systemUiMode: SystemUiMode = SystemUiMode.DEFAULT,
+    val pageInfoMode: PageInfoMode = PageInfoMode.DEFAULT,
+    val pageInfoPosition: PageInfoPosition = PageInfoPosition.BOTTOM,
+    val seamlessChapterNavigation: Boolean = true,
+    val chapterTurnDragMultiplier: Float = 1.0f
+) {
+    val resolvedHorizontalMargin: Int get() = horizontalMargin ?: margin
+    val resolvedVerticalMargin: Int get() = verticalMargin ?: margin
+}
 
 data class ReaderPage(
     val pageIndex: Int,

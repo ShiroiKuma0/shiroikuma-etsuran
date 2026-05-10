@@ -210,6 +210,7 @@ import com.aryan.reader.SearchResult
 import com.aryan.reader.SummarizationResult
 import com.aryan.reader.SummaryCacheManager
 import com.aryan.reader.TtsSettingsSheet
+import com.aryan.reader.TtsWordReplacementsSheet
 import com.aryan.reader.ml.SpeechBubble
 import com.aryan.reader.epubreader.AutoScrollControls
 import com.aryan.reader.epubreader.DictionarySettingsDialog
@@ -224,6 +225,7 @@ import com.aryan.reader.callByokGeminiInlineAi
 import com.aryan.reader.isByokCloudTtsAvailable
 import com.aryan.reader.loadCustomThemes
 import com.aryan.reader.loadGlobalTextureTransparency
+import com.aryan.reader.loadTtsReplacementPreferences
 import com.aryan.reader.paginatedreader.TtsChunk
 import com.aryan.reader.pdf.data.AnnotationSettingsRepository
 import com.aryan.reader.pdf.data.PdfAnnotation
@@ -238,11 +240,14 @@ import com.aryan.reader.pdf.data.VirtualPage
 import com.aryan.reader.rememberSearchState
 import com.aryan.reader.saveCustomThemes
 import com.aryan.reader.saveGlobalTextureTransparency
+import com.aryan.reader.saveTtsReplacementPreferences
+import com.aryan.reader.shared.ReaderTtsReplacementPreferences
 import com.aryan.reader.summarizationUrl
 import com.aryan.reader.tts.SpeakerSamplePlayer
 import com.aryan.reader.tts.TtsPlaybackManager
 import com.aryan.reader.tts.rememberTtsController
 import com.aryan.reader.tts.splitTextIntoChunks
+import com.aryan.reader.withTtsReplacements
 import io.legere.pdfiumandroid.suspend.PdfDocumentKt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -276,6 +281,12 @@ import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.isBackPressed
 import androidx.compose.ui.input.pointer.isForwardPressed
+
+internal fun resolveEraserStrokeWidth(
+    isEraserOverride: Boolean,
+    activeToolThickness: Float,
+    eraserToolThickness: Float
+): Float = if (isEraserOverride) eraserToolThickness else activeToolThickness
 
 @Suppress("KotlinConstantConditions")
 @SuppressLint("UnusedBoxWithConstraintsScope", "ObsoleteSdkInt", "LocalContextGetResourceValueCall")
@@ -441,6 +452,12 @@ fun PdfViewerScreen(
         )
     }
     var showTtsSettingsSheet by remember { mutableStateOf(false) }
+    var showTtsReplacementsSheet by remember { mutableStateOf(false) }
+    var ttsReplacementPreferences by remember { mutableStateOf(loadTtsReplacementPreferences(context)) }
+    val updateTtsReplacementPreferences: (ReaderTtsReplacementPreferences) -> Unit = { next ->
+        ttsReplacementPreferences = next
+        saveTtsReplacementPreferences(context, next)
+    }
 
     DisposableEffect(isKeepScreenOn) {
         view.keepScreenOn = isKeepScreenOn
@@ -805,6 +822,7 @@ fun PdfViewerScreen(
 
     val activeToolColor = toolSettings.getToolColor(selectedTool)
     val activeToolThickness = toolSettings.getToolThickness(selectedTool)
+    val eraserToolThickness = toolSettings.getToolThickness(InkType.ERASER)
 
     val fountainPenColor = toolSettings.getToolColor(InkType.FOUNTAIN_PEN)
     val markerColor = toolSettings.getToolColor(InkType.PEN)
@@ -824,6 +842,7 @@ fun PdfViewerScreen(
 
     val currentStrokeColor by remember(activeToolColor) { derivedStateOf { activeToolColor } }
     val currentStrokeWidth by remember(activeToolThickness) { derivedStateOf { activeToolThickness } }
+    val currentEraserStrokeWidth by remember(eraserToolThickness) { derivedStateOf { eraserToolThickness } }
 
     val pdfTextRepository = remember(context) { PdfTextRepository(context) }
     val annotationRepository = remember(context) { PdfAnnotationRepository(context) }
@@ -1341,6 +1360,30 @@ fun PdfViewerScreen(
     }
 
     Timber.d("Derived currentPage recomposed. New value: $currentPage (Mode: $displayMode)")
+
+    suspend fun rebuildMissingHighlightBounds(
+        document: ReaderDocument,
+        highlights: List<PdfUserHighlight>
+    ): List<PdfUserHighlight> = withContext(Dispatchers.IO) {
+        highlights.map { highlight ->
+            if (highlight.bounds.isNotEmpty()) return@map highlight
+            val start = highlight.range.first
+            val end = highlight.range.second
+            if (highlight.pageIndex < 0 || end <= start) return@map highlight
+
+            runCatching {
+                document.openPage(highlight.pageIndex)?.use { page ->
+                    page.openTextPage().use { textPage ->
+                        val rects = textPage.textPageGetRectsForRanges(intArrayOf(start, end - start))
+                            ?.map { it.rect }
+                            .orEmpty()
+                        val merged = mergePdfRectsIntoLines(rects)
+                        if (merged.isEmpty()) highlight else highlight.copy(bounds = merged)
+                    }
+                } ?: highlight
+            }.getOrDefault(highlight)
+        }
+    }
 
     val onHighlightAdd = remember(pdfDocument, currentBookId) {
         { pageIndex: Int, range: Pair<Int, Int>, text: String, color: PdfHighlightColor ->
@@ -2042,6 +2085,25 @@ fun PdfViewerScreen(
         }
     }
 
+    var isRebuildingSyncedHighlightBounds by remember(currentBookId) { mutableStateOf(false) }
+    LaunchedEffect(pdfDocument, currentBookId, userHighlights.toList()) {
+        val document = pdfDocument ?: return@LaunchedEffect
+        if (currentBookId == null || isRebuildingSyncedHighlightBounds) return@LaunchedEffect
+        val snapshot = userHighlights.toList()
+        if (snapshot.none { it.bounds.isEmpty() && it.range.second > it.range.first }) return@LaunchedEffect
+
+        isRebuildingSyncedHighlightBounds = true
+        try {
+            val rebuilt = rebuildMissingHighlightBounds(document, snapshot)
+            if (rebuilt != snapshot) {
+                userHighlights.clear()
+                userHighlights.addAll(rebuilt)
+            }
+        } finally {
+            isRebuildingSyncedHighlightBounds = false
+        }
+    }
+
     var pendingSaveMode by remember { mutableStateOf<SaveMode?>(null) }
 
     val saveLauncher = rememberLauncherForActivityResult(
@@ -2076,7 +2138,7 @@ fun PdfViewerScreen(
                     viewModel.saveOriginalPdf(effectivePdfUri, uri)
                 }
 
-                else -> {}
+                null -> Unit
             }
         }
         pendingSaveMode = null
@@ -2618,7 +2680,7 @@ fun PdfViewerScreen(
                 val ttsChunks = chunks.mapIndexed { index, text -> TtsChunk(text, "", index) }
 
                 ttsController.start(
-                    chunks = ttsChunks,
+                    chunks = ttsChunks.withTtsReplacements(ttsReplacementPreferences, bookId),
                     bookTitle = bookTitle,
                     chapterTitle = pageTitle,
                     coverImageUri = null,
@@ -3434,6 +3496,7 @@ fun PdfViewerScreen(
             }
 
             showTtsSettingsSheet -> showTtsSettingsSheet = false
+            showTtsReplacementsSheet -> showTtsReplacementsSheet = false
             showThemePanel -> showThemePanel = false
 
             else -> {
@@ -3712,6 +3775,9 @@ fun PdfViewerScreen(
                                             val currentStrokeWidthState by rememberUpdatedState(
                                                 currentStrokeWidth
                                             )
+                                            val currentEraserStrokeWidthState by rememberUpdatedState(
+                                                currentEraserStrokeWidth
+                                            )
 
                                             @Suppress("ControlFlowWithEmptyBody") val onDrawPagination =
                                                 remember(pageIndex) {
@@ -3719,10 +3785,15 @@ fun PdfViewerScreen(
                                                         val effectiveTool = if (isEraserOverride) InkType.ERASER else currentSelectedTool
                                                         if (effectiveTool == InkType.TEXT) {
                                                         } else if (effectiveTool == InkType.ERASER) {
+                                                            val eraserStrokeWidth = resolveEraserStrokeWidth(
+                                                                isEraserOverride,
+                                                                currentStrokeWidthState,
+                                                                currentEraserStrokeWidthState
+                                                            )
                                                             val aspectRatio = pageAspectRatios.getOrElse(pageIndex) { 1f }
                                                             val existing = allAnnotations[pageIndex] ?: emptyList()
                                                             val toRemove = existing.filter {
-                                                                isAnnotationHit(it, point, lastEraserPoint, aspectRatio, currentStrokeWidthState)
+                                                                isAnnotationHit(it, point, lastEraserPoint, aspectRatio, eraserStrokeWidth)
                                                             }
                                                             lastEraserPoint = point
                                                             if (toRemove.isNotEmpty()) {
@@ -3762,10 +3833,15 @@ fun PdfViewerScreen(
                                                             } else if (effectiveTool == InkType.ERASER) {
                                                                 lastEraserPoint = point
                                                                 erasedAnnotationsFromStroke.clear()
+                                                                val eraserStrokeWidth = resolveEraserStrokeWidth(
+                                                                    isEraserOverride,
+                                                                    currentStrokeWidthState,
+                                                                    currentEraserStrokeWidthState
+                                                                )
                                                                 val aspectRatio = pageAspectRatios.getOrElse(pageIndex) { 1f }
                                                                 val existing = allAnnotations[pageIndex] ?: emptyList()
                                                                 val toRemove = existing.filter {
-                                                                    isAnnotationHit(it, point, lastEraserPoint, aspectRatio, currentStrokeWidthState)
+                                                                    isAnnotationHit(it, point, lastEraserPoint, aspectRatio, eraserStrokeWidth)
                                                                 }
                                                                 if (toRemove.isNotEmpty()) {
                                                                     val batch =
@@ -3892,6 +3968,7 @@ fun PdfViewerScreen(
                                                 onNoteRequested = onNoteRequested,
                                                 onTts = { pageIdx, charIdx -> startTtsWithPermissionCheck(pageIdx, charIdx) },
                                                 activeToolThickness = currentStrokeWidthState,
+                                                eraserToolThickness = currentEraserStrokeWidthState,
                                                 lockedState = lockedState,
                                                 onZoomAndPanChanged = { newScale, newOffset ->
                                                     if (pagerState.currentPage == pageIndex) {
@@ -4152,6 +4229,9 @@ fun PdfViewerScreen(
                                     val currentStrokeWidthState by rememberUpdatedState(
                                         currentStrokeWidth
                                     )
+                                    val currentEraserStrokeWidthState by rememberUpdatedState(
+                                        currentEraserStrokeWidth
+                                    )
 
                                     @Suppress("ControlFlowWithEmptyBody") val onDrawStartStable =
                                         remember {
@@ -4164,11 +4244,16 @@ fun PdfViewerScreen(
                                                     } else if (effectiveTool == InkType.ERASER) {
                                                         lastEraserPoint = point
                                                         erasedAnnotationsFromStroke.clear()
+                                                        val eraserStrokeWidth = resolveEraserStrokeWidth(
+                                                            isEraserOverride,
+                                                            currentStrokeWidthState,
+                                                            currentEraserStrokeWidthState
+                                                        )
 
                                                         val aspectRatio = pageAspectRatios.getOrElse(pageIndex) { 1f }
                                                         val existing = allAnnotations[pageIndex] ?: emptyList()
                                                         val toRemove = existing.filter {
-                                                            isAnnotationHit(it, point, lastEraserPoint, aspectRatio, currentStrokeWidthState)
+                                                            isAnnotationHit(it, point, lastEraserPoint, aspectRatio, eraserStrokeWidth)
                                                         }
                                                         if (toRemove.isNotEmpty()) {
                                                             val batch =
@@ -4204,10 +4289,15 @@ fun PdfViewerScreen(
                                         { pageIndex: Int, point: PdfPoint, isEraserOverride: Boolean ->
                                             val effectiveTool = if (isEraserOverride) InkType.ERASER else currentSelectedTool
                                             if (effectiveTool == InkType.ERASER) {
+                                                val eraserStrokeWidth = resolveEraserStrokeWidth(
+                                                    isEraserOverride,
+                                                    currentStrokeWidthState,
+                                                    currentEraserStrokeWidthState
+                                                )
                                                 val aspectRatio = pageAspectRatios.getOrElse(pageIndex) { 1f }
                                                 val existing = allAnnotations[pageIndex] ?: emptyList()
                                                 val toRemove = existing.filter {
-                                                    isAnnotationHit(it, point, lastEraserPoint, aspectRatio, currentStrokeWidthState)
+                                                    isAnnotationHit(it, point, lastEraserPoint, aspectRatio, eraserStrokeWidth)
                                                 }
                                                 lastEraserPoint = point
                                                 if (toRemove.isNotEmpty()) {
@@ -4281,6 +4371,7 @@ fun PdfViewerScreen(
                                             onNoteRequested = onNoteRequested,
                                             onTts = { pageIdx, charIdx -> startTtsWithPermissionCheck(pageIdx, charIdx) },
                                             activeToolThickness = currentStrokeWidthState,
+                                            eraserToolThickness = currentEraserStrokeWidthState,
                                             onLinkClicked = onLinkClickedStable,
                                             onInternalLinkClicked = onInternalLinkNavStable,
                                             bookmarks = bookmarksHolder,
@@ -5019,6 +5110,7 @@ fun PdfViewerScreen(
                         showBars = !isMusicianMode
                     },
                     onShowTtsSettings = { showTtsSettingsSheet = true },
+                    onShowTtsReplacements = { showTtsReplacementsSheet = true },
                     onToggleBookmark = onBookmarkClick,
                     onInsertPage = onInsertPage,
                     onDeletePage = onDeletePage,
@@ -6511,6 +6603,15 @@ fun PdfViewerScreen(
         )
     }
 
+    TtsWordReplacementsSheet(
+        isVisible = showTtsReplacementsSheet,
+        bookId = bookId,
+        bookTitle = documentMetadataTitle ?: originalFileName,
+        preferences = ttsReplacementPreferences,
+        onPreferencesChange = updateTtsReplacementPreferences,
+        onDismiss = { showTtsReplacementsSheet = false },
+    )
+
     if (showDictionarySettingsSheet) {
         DictionarySettingsDialog(
             isVisible = true,
@@ -6684,15 +6785,18 @@ fun PdfViewerScreen(
             title = { Text(stringResource(R.string.title_save_to_device)) },
             text = { Text(stringResource(R.string.desc_choose_format_save)) },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        showSaveDialog = false
-                        pendingSaveMode = SaveMode.ANNOTATED
-                        val suggestedName = getSuggestedFilename(
-                            originalFileName, isAnnotated = true
-                        )
-                        saveLauncher.launch(suggestedName)
-                    }) { Text(stringResource(R.string.action_with_annotations)) }
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(
+                        onClick = {
+                            showSaveDialog = false
+                            pendingSaveMode = SaveMode.ANNOTATED
+                            val suggestedName = getSuggestedFilename(
+                                originalFileName, isAnnotated = true
+                            )
+                            saveLauncher.launch(suggestedName)
+                        }) { Text(stringResource(R.string.action_with_annotations)) }
+
+                }
             },
             dismissButton = {
                 Row {
@@ -6723,31 +6827,34 @@ fun PdfViewerScreen(
             title = { Text(stringResource(R.string.share_chooser_title)) },
             text = { Text(stringResource(R.string.desc_choose_format_share)) },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        showShareDialog = false
-                        isShareLoading = true
-                        Timber.tag("PdfExportDebug").i("SHARE TRIGGERED: userHighlights count: ${userHighlights.size}")
-                        val filename = getSuggestedFilename(
-                            originalFileName, isAnnotated = true
-                        )
-                        coroutineScope.launch {
-                            val currentRichTextLayouts = richTextController?.pageLayouts
-
-                            viewModel.sharePdf(
-                                activityContext = context,
-                                sourceUri = effectivePdfUri,
-                                annotations = allAnnotations,
-                                richTextPageLayouts = currentRichTextLayouts,
-                                textBoxes = textBoxes.toList(),
-                                highlights = userHighlights.toList(),
-                                includeAnnotations = true,
-                                filename = filename,
-                                bookId = currentBookId
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(
+                        onClick = {
+                            showShareDialog = false
+                            isShareLoading = true
+                            Timber.tag("PdfExportDebug").i("SHARE TRIGGERED: userHighlights count: ${userHighlights.size}")
+                            val filename = getSuggestedFilename(
+                                originalFileName, isAnnotated = true
                             )
-                            isShareLoading = false
-                        }
-                    }) { Text(stringResource(R.string.action_with_annotations)) }
+                            coroutineScope.launch {
+                                val currentRichTextLayouts = richTextController?.pageLayouts
+
+                                viewModel.sharePdf(
+                                    activityContext = context,
+                                    sourceUri = effectivePdfUri,
+                                    annotations = allAnnotations,
+                                    richTextPageLayouts = currentRichTextLayouts,
+                                    textBoxes = textBoxes.toList(),
+                                    highlights = userHighlights.toList(),
+                                    includeAnnotations = true,
+                                    filename = filename,
+                                    bookId = currentBookId
+                                )
+                                isShareLoading = false
+                            }
+                        }) { Text(stringResource(R.string.action_with_annotations)) }
+
+                }
             },
             dismissButton = {
                 Row {

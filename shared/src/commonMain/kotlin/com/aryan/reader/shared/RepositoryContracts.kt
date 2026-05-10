@@ -6,7 +6,8 @@ data class ImportedBookFile(
     val name: String,
     val uriString: String?,
     val localPath: String?,
-    val size: Long
+    val size: Long,
+    val sourceFolder: String? = null
 )
 
 interface BookRepository {
@@ -54,5 +55,7 @@ interface AiAdapter {
 interface TtsAdapter {
     val isAvailable: Boolean
     suspend fun speak(text: String)
+    suspend fun pause() = Unit
+    suspend fun resume() = Unit
     suspend fun stop()
 }

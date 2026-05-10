@@ -166,6 +166,7 @@ import com.aryan.reader.SearchResult
 import com.aryan.reader.SummarizationResult
 import com.aryan.reader.SummaryCacheManager
 import com.aryan.reader.TtsSettingsSheet
+import com.aryan.reader.TtsWordReplacementsSheet
 import com.aryan.reader.areReaderAiFeaturesEnabled
 import com.aryan.reader.countWords
 import com.aryan.reader.isByokCloudTtsAvailable
@@ -177,6 +178,7 @@ import com.aryan.reader.loadCustomThemes
 import com.aryan.reader.loadGlobalTextureTransparency
 import com.aryan.reader.loadReaderThemeId
 import com.aryan.reader.loadReaderTextureBitmap
+import com.aryan.reader.loadTtsReplacementPreferences
 import com.aryan.reader.paginatedreader.BookPaginator
 import com.aryan.reader.paginatedreader.CfiUtils
 import com.aryan.reader.paginatedreader.HeaderBlock
@@ -195,12 +197,16 @@ import com.aryan.reader.rememberSearchState
 import com.aryan.reader.saveCustomThemes
 import com.aryan.reader.saveGlobalTextureTransparency
 import com.aryan.reader.saveReaderThemeId
+import com.aryan.reader.saveTtsReplacementPreferences
+import com.aryan.reader.shared.ReaderTtsReplacementPreferences
 import com.aryan.reader.tts.SpeakerSamplePlayer
 import com.aryan.reader.tts.TtsPlaybackManager
 import com.aryan.reader.tts.loadTtsMode
 import com.aryan.reader.tts.splitTextIntoChunks
+import com.aryan.reader.withTtsReplacements
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
@@ -570,6 +576,7 @@ fun EpubReaderScreen(
                 }
             }
         } else null,
+        stableBookId = uiState.selectedBookId,
         viewModel = viewModel
     )
 }
@@ -600,6 +607,7 @@ fun EpubReaderHost(
     onImportFont: (Uri) -> Unit,
     onToggleReflow: ((Int) -> Unit)? = null,
     onDeleteReflow: (() -> Unit)? = null,
+    stableBookId: String? = null,
     viewModel: MainViewModel
 ) {
     val view = LocalView.current
@@ -668,11 +676,16 @@ fun EpubReaderHost(
         )
     }
 
-    val locatorConverter = remember(context) {
+    val readerCacheBookId = remember(stableBookId, epubBook.title, epubBook.fileName) {
+        stableBookId ?: if (epubBook.fileName.length > 20) epubBook.fileName else getBookIdForPrefs(epubBook.title)
+    }
+
+    val locatorConverter = remember(context, readerCacheBookId) {
         LocatorConverter(
             bookCacheDao = BookCacheDatabase.getDatabase(context).bookCacheDao(),
             proto = ProtoBuf { serializersModule = semanticBlockModule },
-            context = context
+            context = context,
+            stableBookId = readerCacheBookId
         )
     }
 
@@ -698,9 +711,7 @@ fun EpubReaderHost(
     var isAutoScrollCollapsed by remember { mutableStateOf(false) }
     var isTtsCollapsed by remember { mutableStateOf(false) }
 
-    val bookId = remember(epubBook.title, epubBook.fileName) {
-        if (epubBook.fileName.length > 20) epubBook.fileName else getBookIdForPrefs(epubBook.title)
-    }
+    val bookId = readerCacheBookId
     var isAutoScrollLocal by remember { mutableStateOf(loadAutoScrollLocalMode(context, bookId)) }
 
     val initialSettings = remember(isAutoScrollLocal) {
@@ -895,6 +906,8 @@ fun EpubReaderHost(
     var currentRenderMode by remember(renderMode) { mutableStateOf(renderMode) }
     var chapterToLoadOnSwitch by remember { mutableStateOf<Int?>(null) }
     var lastKnownLocator by remember(initialLocator) { mutableStateOf(initialLocator) }
+    var paginatedReconfigurationAnchor by remember { mutableStateOf<Locator?>(null) }
+    var isPaginatedReconfigurationRestoring by remember { mutableStateOf(false) }
 
     val bottomPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val roundedCornerBottomPadding = rememberBottomRoundedCornerPadding(view)
@@ -910,18 +923,7 @@ fun EpubReaderHost(
 
     LaunchedEffect(bookmarks) {
         Timber.d("Bookmarks changed, saving...")
-        val stringSet = bookmarks.map { bookmark ->
-            JSONObject().apply {
-                put("cfi", bookmark.cfi)
-                put("chapterTitle", bookmark.chapterTitle)
-                put("label", bookmark.label)
-                put("snippet", bookmark.snippet)
-                bookmark.pageInChapter?.let { put("pageInChapter", it) }
-                bookmark.totalPagesInChapter?.let { put("totalPagesInChapter", it) }
-                put("chapterIndex", bookmark.chapterIndex)
-            }.toString()
-        }
-        onBookmarksChanged(JSONArray(stringSet).toString())
+        onBookmarksChanged(bookmarksToJson(bookmarks))
     }
 
     var activeBookmarkInVerticalView by remember { mutableStateOf<Bookmark?>(null) }
@@ -1209,9 +1211,15 @@ fun EpubReaderHost(
 
     var showPermissionRationaleDialog by remember { mutableStateOf(false) }
     var showTtsSettingsSheet by remember { mutableStateOf(false) }
+    var showTtsReplacementsSheet by remember { mutableStateOf(false) }
     var showTtsControlsSheet by remember { mutableStateOf(false) }
     var showThemePanel by remember { mutableStateOf(false) }
     var showPaletteManager by remember { mutableStateOf(false) }
+    var ttsReplacementPreferences by remember { mutableStateOf(loadTtsReplacementPreferences(context)) }
+    val updateTtsReplacementPreferences: (ReaderTtsReplacementPreferences) -> Unit = { next ->
+        ttsReplacementPreferences = next
+        saveTtsReplacementPreferences(context, next)
+    }
 
     var currentThemeId by remember { mutableStateOf(loadReaderThemeId(context)) }
     var customThemes by remember { mutableStateOf(loadCustomThemes(context)) }
@@ -1350,7 +1358,7 @@ fun EpubReaderHost(
         }
 
         Timber.tag("TTS_LOCATE")
-            .d("Saving locator from TTS. chapter=${locator.chapterIndex}, block=${locator.blockIndex}, progress=$progress")
+            .d("Saving resolved locator position. chapter=${locator.chapterIndex}, block=${locator.blockIndex}, progress=$progress")
         onSavePosition(locator, cfiForWebView, progress)
     }
 
@@ -1535,7 +1543,7 @@ fun EpubReaderHost(
                             val coverUriString = coverImagePath?.let { Uri.fromFile(File(it)).toString() }
                             ttsChapterIndex = chapterIndex
                             ttsController.start(
-                                chunks = ttsChunks,
+                                chunks = ttsChunks.withTtsReplacements(ttsReplacementPreferences, bookId),
                                 bookTitle = epubBook.title,
                                 chapterTitle = chapterTitle,
                                 coverImageUri = coverUriString,
@@ -1588,7 +1596,11 @@ fun EpubReaderHost(
                     val relativeOffset = startOffset - target.startOffsetInSource
                     val safeRelativeOffset = relativeOffset.coerceIn(0, target.text.length)
                     val slicedText = target.text.substring(safeRelativeOffset)
-                    val newChunk = target.copy(text = slicedText, startOffsetInSource = startOffset)
+                    val newChunk = target.copy(
+                        text = slicedText,
+                        startOffsetInSource = startOffset,
+                        spokenText = slicedText,
+                    )
 
                     val remainingChunks = mutableListOf(newChunk)
                     remainingChunks.addAll(chunks.subList(foundIdx + 1, chunks.size))
@@ -1599,7 +1611,7 @@ fun EpubReaderHost(
                         val chapterTitle = chapters.getOrNull(chapterIndex)?.title
                         val coverUriString = coverImagePath?.let { Uri.fromFile(File(it)).toString() }
                         ttsController.start(
-                            chunks = remainingChunks,
+                            chunks = remainingChunks.withTtsReplacements(ttsReplacementPreferences, bookId),
                             bookTitle = epubBook.title,
                             chapterTitle = chapterTitle,
                             coverImageUri = coverUriString,
@@ -1662,7 +1674,9 @@ fun EpubReaderHost(
         currentTtsMode = currentTtsMode,
         getAuthToken = { viewModel.getAuthToken() },
         locatorConverter = locatorConverter,
-        epubBook = epubBook
+        epubBook = epubBook,
+        ttsReplacementPreferences = ttsReplacementPreferences,
+        ttsReplacementBookId = bookId
     )
 
     TtsHighlightHandler(
@@ -2045,8 +2059,26 @@ fun EpubReaderHost(
         }
     }
 
-    LaunchedEffect(paginatedPagerState.currentPage, paginator) {
-        if (currentRenderMode == RenderMode.PAGINATED && paginator != null && isPagerInitialized) {
+    LaunchedEffect(paginatedPagerState, paginator, currentRenderMode, isPagerInitialized, isPaginatedReconfigurationRestoring) {
+        if (currentRenderMode != RenderMode.PAGINATED || paginator == null || !isPagerInitialized) {
+            return@LaunchedEffect
+        }
+        snapshotFlow { paginatedPagerState.currentPage }
+            .collectLatest { page ->
+                if (!isPaginatedReconfigurationRestoring) {
+                    (paginator as? BookPaginator)?.getLocatorForPage(page)?.let { locator ->
+                        lastKnownLocator = locator
+                    }
+                }
+            }
+    }
+
+    LaunchedEffect(paginatedPagerState.currentPage, paginator, isPaginatedReconfigurationRestoring) {
+        if (currentRenderMode == RenderMode.PAGINATED &&
+            paginator != null &&
+            isPagerInitialized &&
+            !isPaginatedReconfigurationRestoring
+        ) {
             delay(1500L)
             val pageToSave = paginatedPagerState.currentPage
 
@@ -2164,12 +2196,21 @@ fun EpubReaderHost(
                 RenderMode.PAGINATED -> {
                     scope.launch {
                         val pageToSave = paginatedPagerState.currentPage
-                        val locator = (paginator as? BookPaginator)?.getLocatorForPage(pageToSave)
+                        val pageLocator = if (isPaginatedReconfigurationRestoring) {
+                            null
+                        } else {
+                            (paginator as? BookPaginator)?.getLocatorForPage(pageToSave)
+                        }
+                        val locator = pageLocator ?: paginatedReconfigurationAnchor ?: lastKnownLocator
                         val chapterIndex = paginator?.findChapterIndexForPage(pageToSave)
 
-                        if (locator != null && chapterIndex != null) {
+                        if (locator != null) {
                             val bookPaginator = paginator as? BookPaginator
-                            val progress = if (totalBookLengthChars > 0 && bookPaginator != null) {
+                            val progress = if (pageLocator == null || chapterIndex == null) {
+                                saveResolvedLocatorPosition(locator, null)
+                                onNavigateBack()
+                                return@launch
+                            } else if (totalBookLengthChars > 0 && bookPaginator != null) {
                                 val completedCharsInPreviousChapters = chapters.take(chapterIndex).sumOf { it.plainTextContent.length.toLong() }
                                 val currentPageInChapter = (bookPaginator.chapterStartPageIndices[chapterIndex] ?: 0).let { pageToSave - it }
                                 val charsScrolledInCurrentChapter = bookPaginator.getCharactersScrolledInChapter(chapterIndex, currentPageInChapter)
@@ -2186,7 +2227,7 @@ fun EpubReaderHost(
                             )
                             onSavePosition(locator, null, progress)
                         } else {
-                            Timber.w("Final save for paginated view failed. Locator or chapter index is null."
+                            Timber.w("Final save for paginated view failed. Locator is null."
                             )
                         }
                         onNavigateBack()
@@ -3570,7 +3611,7 @@ fun EpubReaderHost(
                                                         ttsChapterIndex = targetChapterIndex
 
                                                         ttsController.start(
-                                                            chunks = ttsChunks,
+                                                            chunks = ttsChunks.withTtsReplacements(ttsReplacementPreferences, bookId),
                                                             bookTitle = epubBook.title,
                                                             chapterTitle = chapterTitle,
                                                             coverImageUri = coverUriString,
@@ -3886,6 +3927,7 @@ fun EpubReaderHost(
                         ) {
                             PaginatedReaderScreen(
                                 book = epubBook,
+                                bookId = readerCacheBookId,
                                 isDarkTheme = isDarkTheme,
                                 effectiveBg = effectiveBg,
                                 effectiveText = effectiveText,
@@ -3910,7 +3952,18 @@ fun EpubReaderHost(
                                 activeTextureId = activeTextureId,
                                 activeTextureAlpha = activeTextureAlpha,
                                 initialChapterIndexInBook = lastKnownLocator?.chapterIndex,
-                                modifier = Modifier.alpha(if (isPagerInitialized) 1f else 0f),
+                                fallbackLocatorForReconfiguration = paginatedReconfigurationAnchor ?: lastKnownLocator,
+                                onReconfigurationAnchorCaptured = { locator ->
+                                    paginatedReconfigurationAnchor = locator
+                                    lastKnownLocator = locator
+                                },
+                                onReconfigurationRestoreActiveChanged = { isActive ->
+                                    isPaginatedReconfigurationRestoring = isActive
+                                    if (!isActive) {
+                                        paginatedReconfigurationAnchor = null
+                                    }
+                                },
+                                modifier = Modifier.alpha(if (isPagerInitialized && !isPaginatedReconfigurationRestoring) 1f else 0f),
                                 onPaginatorReady = { newPaginator ->
                                     paginator = newPaginator
                                 },
@@ -4624,6 +4677,7 @@ fun EpubReaderHost(
                     searchFocusRequester = searchFocusRequester,
                     modifier = Modifier.align(Alignment.TopCenter),
                     onOpenTtsSettings = { showTtsSettingsSheet = true },
+                    onOpenTtsReplacements = { showTtsReplacementsSheet = true },
                     onOpenDictionarySettings = { showDictionarySettingsSheet = true },
                     onOpenThemeSettings = { showThemePanel = true },
                     onOpenVisualOptions = { showVisualOptionsSheet = true },
@@ -5258,6 +5312,15 @@ fun EpubReaderHost(
                 bookTitle = epubBook.title
             )
         }
+
+        TtsWordReplacementsSheet(
+            isVisible = showTtsReplacementsSheet,
+            bookId = bookId,
+            bookTitle = epubBook.title,
+            preferences = ttsReplacementPreferences,
+            onPreferencesChange = updateTtsReplacementPreferences,
+            onDismiss = { showTtsReplacementsSheet = false },
+        )
 
         if (showCustomizeToolsSheet) {
             CustomizeToolsSheet(

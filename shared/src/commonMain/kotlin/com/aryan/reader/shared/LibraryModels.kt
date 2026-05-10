@@ -1,5 +1,8 @@
 package com.aryan.reader.shared
 
+import com.aryan.reader.shared.reader.ReaderBookmark
+import com.aryan.reader.shared.reader.ReaderSettings
+
 enum class FileType {
     PDF, EPUB, MOBI, MD, TXT, HTML, FB2, CBZ, CBR, CB7, DOCX, ODT, FODT, UNKNOWN
 }
@@ -45,6 +48,8 @@ enum class ReadStatusFilter {
     COMPLETED
 }
 
+const val IN_APP_STORAGE_SOURCE = "IN_APP_STORAGE"
+
 enum class ShelfType {
     MANUAL,
     SMART,
@@ -72,15 +77,21 @@ data class BookItem(
     val type: FileType,
     val displayName: String,
     val timestamp: Long,
+    val coverImagePath: String? = null,
     val title: String? = null,
     val author: String? = null,
     val progressPercentage: Float? = null,
     val isRecent: Boolean = true,
     val fileSize: Long = 0L,
     val sourceFolder: String? = null,
+    val folderTextMetadataParsed: Boolean = false,
     val seriesName: String? = null,
     val seriesIndex: Double? = null,
-    val tags: List<Tag> = emptyList()
+    val tags: List<Tag> = emptyList(),
+    val lastPageIndex: Int? = null,
+    val readerSettings: ReaderSettings? = null,
+    val readerBookmarks: List<ReaderBookmark> = emptyList(),
+    val readerHighlights: List<UserHighlight> = emptyList()
 )
 
 data class Shelf(

@@ -723,6 +723,7 @@ private fun WrappingContentLayout(
 fun PaginatedReaderScreen(
     modifier: Modifier = Modifier,
     book: EpubBook,
+    bookId: String? = null,
     isDarkTheme: Boolean,
     effectiveBg: Color,
     effectiveText: Color,
@@ -739,6 +740,9 @@ fun PaginatedReaderScreen(
     textAlign: ReaderTextAlign,
     ttsHighlightInfo: TtsHighlightInfo?,
     initialChapterIndexInBook: Int?,
+    fallbackLocatorForReconfiguration: Locator? = null,
+    onReconfigurationAnchorCaptured: (Locator) -> Unit = {},
+    onReconfigurationRestoreActiveChanged: (Boolean) -> Unit = {},
     onPaginatorReady: (IPaginator) -> Unit,
     onTap: (Offset?) -> Unit,
     isProUser: Boolean,
@@ -796,37 +800,32 @@ fun PaginatedReaderScreen(
 
         var anchorLocatorForReconfig by remember { mutableStateOf<Locator?>(null) }
         val currentPaginatorRef = remember { mutableStateOf<IPaginator?>(null) }
+        val latestFallbackLocatorForReconfiguration by rememberUpdatedState(fallbackLocatorForReconfiguration)
 
-        val previousState = remember {
-            arrayOf<Any>(this.constraints, isDarkTheme, effectiveBg, effectiveText)
+        var previousConstraints by remember {
+            mutableStateOf(this.constraints)
         }
 
-        if (previousState[0] != this.constraints ||
-            previousState[1] != isDarkTheme ||
-            previousState[2] != effectiveBg ||
-            previousState[3] != effectiveText
-        ) {
+        if (previousConstraints != this.constraints) {
             val activePaginator = currentPaginatorRef.value
-            if (activePaginator is BookPaginator) {
-                val currentPage = pagerState.currentPage
-                val locator = activePaginator.getLocatorForPage(currentPage)
-                anchorLocatorForReconfig = locator
+            val currentPage = pagerState.currentPage
+            val locator = resolvePaginatedReconfigurationAnchor(
+                currentPageLocator = (activePaginator as? BookPaginator)?.getLocatorForPage(currentPage),
+                fallbackLocator = fallbackLocatorForReconfiguration
+            )
+            anchorLocatorForReconfig = locator
 
-                Timber.tag("ThemeReconfig").d("""
+            Timber.tag("ThemeReconfig").d("""
             RECONFIG DETECTED
-            - Reason: ${if (previousState[0] != this.constraints) "Constraints" else "Theme/Colors"}
+            - Reason: Constraints
             - Current Page: $currentPage
             - Saved Locator: $locator
         """.trimIndent())
-            }
-            previousState[0] = this.constraints
-            previousState[1] = isDarkTheme
-            previousState[2] = effectiveBg
-            previousState[3] = effectiveText
+            previousConstraints = this.constraints
         }
 
-        val textStyle = remember(
-            baseTextStyle, effectiveText,
+        val layoutTextStyle = remember(
+            baseTextStyle,
             debouncedFontSizeMult,
             debouncedLineHeightMult,
             debouncedFontFamily
@@ -835,7 +834,7 @@ fun PaginatedReaderScreen(
             val adjustedLineHeight = adjustedFontSize * paginationLineHeightMultiplierForWebViewSetting(debouncedLineHeightMult)
 
             baseTextStyle.copy(
-                color = effectiveText,
+                color = Color.Unspecified,
                 fontSize = adjustedFontSize,
                 lineHeight = adjustedLineHeight,
                 fontFamily = debouncedFontFamily,
@@ -847,6 +846,9 @@ fun PaginatedReaderScreen(
                     trim = LineHeightStyle.Trim.None
                 )
             )
+        }
+        val textStyle = remember(layoutTextStyle, effectiveText) {
+            layoutTextStyle.copy(color = effectiveText)
         }
 
         LaunchedEffect(pagerState) {
@@ -875,12 +877,13 @@ fun PaginatedReaderScreen(
                 delay(400L)
 
                 val activePaginator = currentPaginatorRef.value
-                if (activePaginator is BookPaginator) {
-                    val currentPage = pagerState.currentPage
-                    val locator = activePaginator.getLocatorForPage(currentPage)
-                    if (locator != null) {
-                        anchorLocatorForReconfig = locator
-                    }
+                val currentPage = pagerState.currentPage
+                val locator = resolvePaginatedReconfigurationAnchor(
+                    currentPageLocator = (activePaginator as? BookPaginator)?.getLocatorForPage(currentPage),
+                    fallbackLocator = fallbackLocatorForReconfiguration
+                )
+                if (locator != null) {
+                    anchorLocatorForReconfig = locator
                 }
 
                 debouncedFontSizeMult = fontSizeMultiplier
@@ -955,7 +958,15 @@ fun PaginatedReaderScreen(
             remember(initialChapterIndexInBook, anchorLocatorForReconfig) {
                 anchorLocatorForReconfig?.chapterIndex ?: initialChapterIndexInBook ?: 0
             }
-        val paginator = remember(book, textConstraints, isDarkTheme, textStyle, userTextAlign, effectiveBg, effectiveText, debouncedParagraphGapMult) {
+
+        LaunchedEffect(anchorLocatorForReconfig) {
+            anchorLocatorForReconfig?.let { locator ->
+                onReconfigurationAnchorCaptured(locator)
+                onReconfigurationRestoreActiveChanged(true)
+            }
+        }
+
+        val paginator = remember(book, bookId, textConstraints, layoutTextStyle, userTextAlign, debouncedParagraphGapMult, debouncedImageSizeMult, debouncedVerticalMarginMult) {
         val userAgentStylesheet = UserAgentStylesheet.default
             var allRules = OptimizedCssRules()
             val allFontFaces = mutableListOf<FontFaceInfo>()
@@ -963,12 +974,11 @@ fun PaginatedReaderScreen(
             val uaResult = CssParser.parse(
                 cssContent = userAgentStylesheet,
                 cssPath = null,
-                baseFontSizeSp = textStyle.fontSize.value,
+                baseFontSizeSp = layoutTextStyle.fontSize.value,
                 density = density.density,
                 constraints = textConstraints,
-                isDarkTheme = isDarkTheme,
-                themeBackgroundColor = effectiveBg,
-                themeTextColor = effectiveText
+                isDarkTheme = false,
+                adaptThemeColors = false
             )
             allRules = allRules.merge(uaResult.rules)
             allFontFaces.addAll(uaResult.fontFaces)
@@ -977,12 +987,11 @@ fun PaginatedReaderScreen(
                 val bookCssResult = CssParser.parse(
                     cssContent = content,
                     cssPath = path,
-                    baseFontSizeSp = textStyle.fontSize.value,
+                    baseFontSizeSp = layoutTextStyle.fontSize.value,
                     density = density.density,
                     constraints = textConstraints,
-                    isDarkTheme = isDarkTheme,
-                    themeBackgroundColor = effectiveBg,
-                    themeTextColor = effectiveText
+                    isDarkTheme = false,
+                    adaptThemeColors = false
                 )
                 allRules = allRules.merge(bookCssResult.rules)
                 allFontFaces.addAll(bookCssResult.fontFaces)
@@ -990,12 +999,11 @@ fun PaginatedReaderScreen(
             val fontFamilyMap = loadFontFamilies(
                 fontFaces = allFontFaces, extractionPath = book.extractionBasePath
             )
-            book.title
             val bookCacheDao =
                 BookCacheDatabase.getDatabase(context.applicationContext).bookCacheDao()
             val proto = ProtoBuf { serializersModule = semanticBlockModule }
 
-            val uniqueBookId = if (book.fileName.length > 20) book.fileName else book.title
+            val uniqueBookId = bookId ?: if (book.fileName.length > 20) book.fileName else book.title
 
             Timber.d("Recreating BookPaginator for ID: $uniqueBookId. TextAlign: $userTextAlign")
             Timber.tag("ReflowPaginationDiag").d("PaginatedReaderScreen: Instantiating BookPaginator. book.chaptersForPagination.size=${book.chaptersForPagination.size}, initialChapter=$effectiveInitialChapter")
@@ -1005,7 +1013,7 @@ fun PaginatedReaderScreen(
                 chapters = book.chaptersForPagination,
                 textMeasurer = textMeasurer,
                 constraints = textConstraints,
-                textStyle = textStyle,
+                textStyle = layoutTextStyle,
                 extractionBasePath = book.extractionBasePath,
                 density = density,
                 fontFamilyMap = fontFamilyMap,
@@ -1037,25 +1045,32 @@ fun PaginatedReaderScreen(
             if (anchorLocatorForReconfig != null) {
                 Timber.tag("POS_DIAG").d("Restoration Triggered. Anchor Locator: $anchorLocatorForReconfig")
 
-                snapshotFlow { paginator.isLoading }.filter { !it }.first()
+                try {
+                    onReconfigurationRestoreActiveChanged(true)
+                    snapshotFlow { paginator.isLoading }.filter { !it }.first()
 
-                val targetLocator = anchorLocatorForReconfig
-                if (targetLocator != null) {
-                    val page = paginator.findPageForLocator(targetLocator)
+                    val targetLocator = anchorLocatorForReconfig
+                    if (targetLocator != null) {
+                        val page = paginator.findPageForLocator(targetLocator)
 
-                    Timber.tag("POS_DIAG").d("Restoration Result: Paginator resolved locator to page: $page")
+                        Timber.tag("POS_DIAG").d("Restoration Result: Paginator resolved locator to page: $page")
 
-                    if (page != null) {
-                        pagerState.scrollToPage(page)
-                        Timber.tag("POS_DIAG").i("Restoration: Pager scrolled to $page")
-                    } else {
-                        val startPage = paginator.chapterStartPageIndices[targetLocator.chapterIndex]
-                        if (startPage != null) {
-                            Timber.tag("POS_DIAG").w("Restoration: Precise page not found, falling back to chapter start: $startPage")
-                            pagerState.scrollToPage(startPage)
+                        if (page != null) {
+                            pagerState.scrollToPage(page)
+                            paginator.onUserScrolledTo(page)
+                            Timber.tag("POS_DIAG").i("Restoration: Pager scrolled to $page")
+                        } else {
+                            val startPage = paginator.chapterStartPageIndices[targetLocator.chapterIndex]
+                            if (startPage != null) {
+                                Timber.tag("POS_DIAG").w("Restoration: Precise page not found, falling back to chapter start: $startPage")
+                                pagerState.scrollToPage(startPage)
+                                paginator.onUserScrolledTo(startPage)
+                            }
                         }
+                        anchorLocatorForReconfig = null
                     }
-                    anchorLocatorForReconfig = null
+                } finally {
+                    onReconfigurationRestoreActiveChanged(false)
                 }
             }
         }
@@ -1083,13 +1098,31 @@ fun PaginatedReaderScreen(
 
         LaunchedEffect(pagerState, paginator) {
             snapshotFlow { pagerState.currentPage }.debounce(500)
-                .collectLatest { page -> paginator.onUserScrolledTo(page) }
+                .collectLatest { page ->
+                    if (anchorLocatorForReconfig == null) {
+                        paginator.onUserScrolledTo(page)
+                    }
+                }
         }
 
         LaunchedEffect(paginator, pagerState) {
             paginator.pageShiftRequest.collect { shiftAmount ->
-                val newPage = pagerState.currentPage + shiftAmount
-                pagerState.scrollToPage(newPage)
+                val anchor = resolvePaginatedReconfigurationAnchor(
+                    currentPageLocator = anchorLocatorForReconfig,
+                    fallbackLocator = latestFallbackLocatorForReconfiguration
+                )
+                val resolvedPage = anchor?.let { locator ->
+                    (paginator as? BookPaginator)?.findPageForLocator(locator)
+                }
+
+                if (resolvedPage != null) {
+                    pagerState.scrollToPage(resolvedPage)
+                    paginator.onUserScrolledTo(resolvedPage)
+                } else {
+                    val newPage = pagerState.currentPage + shiftAmount
+                    pagerState.scrollToPage(newPage)
+                    paginator.onUserScrolledTo(newPage)
+                }
             }
         }
 
@@ -2218,6 +2251,13 @@ internal fun PaginatedReaderContent(
 
                         var pageContent by remember { mutableStateOf<Page?>(null) }
                         var currentChapterPath by remember { mutableStateOf<String?>(null) }
+                        val themedPageContent = remember(pageContent, isDarkTheme, effectiveBg, effectiveText) {
+                            pageContent?.applyReaderThemeForDisplay(
+                                isDarkTheme = isDarkTheme,
+                                themeBackgroundColor = effectiveBg,
+                                themeTextColor = effectiveText
+                            )
+                        }
 
                         LaunchedEffect(pageIndex, uiState.generation) {
                             val fetchStartTime = System.currentTimeMillis()
@@ -2236,7 +2276,7 @@ internal fun PaginatedReaderContent(
                         }
 
                         val textBlocksOnPage =
-                            pageContent?.content?.extractTextBlocks()
+                            themedPageContent?.content?.extractTextBlocks()
                                 ?.filter { it.cfi != null } ?: emptyList()
                         val lastTextBlock = textBlocksOnPage.lastOrNull()
                         val lastBlockAbs = lastTextBlock?.let {
@@ -2379,7 +2419,8 @@ internal fun PaginatedReaderContent(
                                     horizontal = horizontalPadding,
                                     vertical = verticalPadding
                                 ), contentAlignment = Alignment.TopStart) {
-                                    if (pageContent != null) {
+                                    if (themedPageContent != null) {
+                                        val displayPage = themedPageContent
                                         val onGeneralTapCallback: (Offset) -> Unit = { offset ->
                                             activeSelection = null
                                             onTap(offset)
@@ -2405,7 +2446,7 @@ internal fun PaginatedReaderContent(
                                             val ttsHighlightColor =
                                                 MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f)
 
-                                            pageContent!!.content.forEach { block ->
+                                            displayPage.content.forEach { block ->
                                                 val marginModifier = Modifier.padding(
                                                     top = block.style.margin.top.coerceAtLeast(0.dp),
                                                     bottom = block.style.margin.bottom.coerceAtLeast(

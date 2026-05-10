@@ -40,7 +40,6 @@ import com.aryan.reader.data.LocalSyncUtils
 import com.aryan.reader.data.FolderBookMetadata
 import java.io.File
 import android.provider.DocumentsContract
-import java.security.MessageDigest
 
 class FolderSyncWorker(
     private val appContext: Context,
@@ -316,7 +315,13 @@ class FolderSyncWorker(
                                     val lastModified = if (!cursor.isNull(modCol)) cursor.getLong(modCol) else 0L
 
                                     val type = getFileType(name, mimeType)
-                                    if (type != null && type in allowedFileTypes && !name.endsWith(".json") && !name.startsWith(".")) {
+                                    if (
+                                        type != null &&
+                                        type in allowedFileTypes &&
+                                        isLocalFolderSyncEligibleFile(name, mimeType) &&
+                                        !name.endsWith(".json") &&
+                                        !name.startsWith(".")
+                                    ) {
                                         supportedBooksSeen++
                                         val stableId = buildStableBookId(name, rootDocId, docId)
                                         foundBookIds.add(stableId)
@@ -554,11 +559,14 @@ class FolderSyncWorker(
             val sidecarData = preloadedSidecars[book.bookId] ?: continue
             val (remoteTs, jsonPayload) = sidecarData
 
+            val safeSlashBookId = book.bookId.replace("/", "_")
+            val safeRichTextBookId = book.bookId.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
             val localFiles = listOf(
-                File(appContext.filesDir, "annotations/annotation_${book.bookId}.json"),
-                File(appContext.filesDir, "pdf_rich_text/text_${book.bookId}.json"),
-                File(appContext.filesDir, "page_layouts/layout_${book.bookId}.json"),
-                File(appContext.filesDir, "pdf_text_boxes/boxes_${book.bookId}.json")
+                File(appContext.filesDir, "annotations/annotation_$safeSlashBookId.json"),
+                File(appContext.filesDir, "rich_doc_${safeRichTextBookId}.json"),
+                File(appContext.filesDir, "page_layouts/layout_$safeSlashBookId.json"),
+                File(appContext.filesDir, "textboxes/textboxes_$safeSlashBookId.json"),
+                File(appContext.filesDir, "pdf_highlights/highlights_$safeSlashBookId.json")
             )
             val localTs = localFiles.maxOfOrNull { if (it.exists()) it.lastModified() else 0L } ?: 0L
 
@@ -607,10 +615,7 @@ class FolderSyncWorker(
 
     private fun buildStableBookId(name: String, rootDocId: String, docId: String): String {
         val relativePath = buildRelativePath(rootDocId, docId, name)
-        if (relativePath.equals(name, ignoreCase = true)) {
-            return "local_$name"
-        }
-        return "local_${name}_${shortHash(relativePath.lowercase())}"
+        return com.aryan.reader.shared.LocalFolderSyncEngine.buildStableBookId(name, relativePath)
     }
 
     private fun buildRelativePath(rootDocId: String, docId: String, fallbackName: String): String {
@@ -623,11 +628,6 @@ class FolderSyncWorker(
             docPath.substringAfterLast('/', fallbackName)
         }
         return relative.ifBlank { fallbackName }
-    }
-
-    private fun shortHash(value: String): String {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
-        return bytes.joinToString("") { "%02x".format(it) }.take(12)
     }
 
     private fun computeStableIdForStoredItem(item: RecentFileItem, rootDocId: String): String? {

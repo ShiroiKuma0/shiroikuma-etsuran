@@ -38,11 +38,16 @@ class SharedLibraryStateProjector(
         val queried = filterBySearch(allLibraryBooks, current.searchQuery)
         val filtered = applyLibraryFilters(queried, current.libraryFilters)
         val sortedLibraryBooks = sortBooks(filtered, current.sortOrder)
+            .withPinnedFirst(current.pinnedLibraryBookIds)
         val visibleRecentBooks = sortBooks(
             allLibraryBooks.filter { it.isRecent },
             current.sortOrder
-        ).take(if (current.recentFilesLimit > 0) current.recentFilesLimit else Int.MAX_VALUE)
+        )
+            .withPinnedFirst(current.pinnedHomeBookIds)
+            .take(if (current.recentFilesLimit > 0) current.recentFilesLimit else Int.MAX_VALUE)
         val openTabs = current.openTabIds.mapNotNull { tabId -> allLibraryBooks.find { it.id == tabId } }
+        val openTabIds = openTabs.map { it.id }
+        val activeTabBookId = current.activeTabBookId?.takeIf { it in openTabIds }
         val shelfProjection = buildShelves(
             allLibraryBooks = allLibraryBooks,
             shelfRecords = input.shelfRecords,
@@ -81,6 +86,8 @@ class SharedLibraryStateProjector(
             },
             shelves = shelfProjection.shelves,
             openTabs = openTabs,
+            openTabIds = openTabIds,
+            activeTabBookId = activeTabBookId,
             booksAvailableForAdding = booksAvailableForAdding,
             allTags = input.tags
         )
@@ -99,13 +106,22 @@ class SharedLibraryStateProjector(
         val booksById = allLibraryBooks.associateBy { it.id }
 
         shelfRecords.forEach { shelf ->
-            val bookIds = shelfRefs
-                .filter { it.shelfId == shelf.id }
-                .sortedBy { it.addedAt }
-                .map { it.bookId }
-            val books = bookIds.mapNotNull { booksById[it] }
-            shelves.add(Shelf(shelf.id, shelf.name, ShelfType.MANUAL, sortBooks(books, sortOrder)))
-            shelvedBookIds.addAll(bookIds)
+            if (shelf.isSmart && shelf.smartRulesJson != null) {
+                val definition = SmartCollectionEngine.fromJson(shelf.smartRulesJson)
+                if (definition != null) {
+                    val matchingBooks = allLibraryBooks.filter { SmartCollectionEngine.evaluate(it, definition) }
+                    shelves.add(Shelf(shelf.id, shelf.name, ShelfType.SMART, sortBooks(matchingBooks, sortOrder)))
+                    shelvedBookIds.addAll(matchingBooks.map { it.id })
+                }
+            } else {
+                val bookIds = shelfRefs
+                    .filter { it.shelfId == shelf.id }
+                    .sortedBy { it.addedAt }
+                    .map { it.bookId }
+                val books = bookIds.mapNotNull { booksById[it] }
+                shelves.add(Shelf(shelf.id, shelf.name, ShelfType.MANUAL, sortBooks(books, sortOrder)))
+                shelvedBookIds.addAll(bookIds)
+            }
         }
 
         val tagShelves = tags.mapNotNull { tag ->
@@ -257,7 +273,7 @@ fun filterBySearch(books: List<BookItem>, searchQuery: String): List<BookItem> {
 fun applyLibraryFilters(books: List<BookItem>, filters: LibraryFilters): List<BookItem> {
     return books.filter { book ->
         val matchType = filters.fileTypes.isEmpty() || book.type in filters.fileTypes
-        val matchFolder = filters.sourceFolders.isEmpty() || book.sourceFolder in filters.sourceFolders
+        val matchFolder = book.matchesSourceFolders(filters.sourceFolders)
         val progress = book.progressPercentage ?: 0f
         val matchStatus = when (filters.readStatus) {
             ReadStatusFilter.ALL -> true
@@ -274,7 +290,7 @@ fun sortBooks(books: List<BookItem>, sortOrder: SortOrder): List<BookItem> {
     return when (sortOrder) {
         SortOrder.RECENT -> books.sortedByDescending { it.timestamp }
         SortOrder.TITLE_ASC -> books.sortedBy { it.title?.lowercase() ?: it.displayName.lowercase() }
-        SortOrder.AUTHOR_ASC -> books.sortedBy { it.author?.lowercase() ?: "" }
+        SortOrder.AUTHOR_ASC -> books.sortedWith(compareBy(nullsLast()) { it.author?.lowercase() })
         SortOrder.PERCENT_ASC -> books.sortedBy { it.progressPercentage ?: 0f }
         SortOrder.PERCENT_DESC -> books.sortedByDescending { it.progressPercentage ?: 0f }
         SortOrder.SIZE_ASC -> books.sortedBy { it.fileSize }
@@ -301,7 +317,8 @@ fun SharedReaderScreenState.withImportedFiles(
                 timestamp = now + index,
                 title = file.name.substringBeforeLast('.'),
                 fileSize = file.size,
-                sourceFolder = file.localPath?.parentPath()
+                sourceFolder = file.sourceFolder ?: file.localPath?.parentPath(),
+                isRecent = false
             )
         }
     }
@@ -321,4 +338,14 @@ private fun String.parentPath(): String? {
     val normalized = replace('\\', '/')
     val parent = normalized.substringBeforeLast('/', missingDelimiterValue = "")
     return parent.ifBlank { null }
+}
+
+private fun List<BookItem>.withPinnedFirst(pinnedBookIds: Set<String>): List<BookItem> {
+    if (pinnedBookIds.isEmpty()) return this
+    return withIndex()
+        .sortedWith(
+            compareByDescending<IndexedValue<BookItem>> { it.value.id in pinnedBookIds }
+                .thenBy { it.index }
+        )
+        .map { it.value }
 }

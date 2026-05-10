@@ -8,7 +8,8 @@ import kotlin.math.roundToInt
 
 enum class PdfAnnotationKind {
     INK,
-    TEXT
+    TEXT,
+    HIGHLIGHT
 }
 
 enum class PdfInkTool {
@@ -44,15 +45,95 @@ data class SharedPdfAnnotation(
     val tool: PdfInkTool = PdfInkTool.PEN,
     val points: List<PdfPagePoint> = emptyList(),
     val bounds: PdfPageBounds? = null,
+    val boundsList: List<PdfPageBounds> = emptyList(),
     val text: String = "",
+    val note: String? = null,
     val colorArgb: Int,
     val backgroundArgb: Int = 0x00FFFFFF,
     val strokeWidth: Float = 2f,
     val fontSize: Float = 16f,
     val isBold: Boolean = false,
     val isItalic: Boolean = false,
+    val isUnderline: Boolean = false,
+    val isStrikeThrough: Boolean = false,
+    val fontPath: String? = null,
+    val fontName: String? = null,
+    val rangeStartIndex: Int? = null,
+    val rangeEndIndex: Int? = null,
     val createdAt: Long = 0L
 )
+
+@Serializable
+data class SharedPdfEmbeddedAnnotation(
+    val id: String,
+    val pageIndex: Int,
+    val index: Int,
+    val subtype: Int,
+    val bounds: PdfPageBounds,
+    val contents: String = "",
+    val author: String = "",
+    val name: String = "",
+    val inReplyTo: String = "",
+    val replies: List<SharedPdfEmbeddedAnnotation> = emptyList()
+) {
+    val hasVisibleText: Boolean
+        get() = contents.isNotBlank() || replies.any { it.hasVisibleText }
+}
+
+object SharedPdfEmbeddedAnnotationThreads {
+    fun group(
+        annotations: List<SharedPdfEmbeddedAnnotation>,
+        geometryTolerance: Float = 0.02f
+    ): List<SharedPdfEmbeddedAnnotation> {
+        if (annotations.isEmpty()) return emptyList()
+
+        val byName = annotations
+            .filter { it.name.isNotBlank() }
+            .associateBy { it.name }
+        val childrenByParentId = mutableMapOf<String, MutableList<SharedPdfEmbeddedAnnotation>>()
+        val roots = mutableListOf<SharedPdfEmbeddedAnnotation>()
+
+        annotations.forEach { annotation ->
+            val parent = byName[annotation.inReplyTo]
+            if (parent != null && parent.id != annotation.id) {
+                childrenByParentId.getOrPut(parent.id) { mutableListOf() } += annotation
+            } else {
+                roots += annotation
+            }
+        }
+
+        fun attachReplies(
+            annotation: SharedPdfEmbeddedAnnotation,
+            visitedIds: Set<String> = emptySet()
+        ): SharedPdfEmbeddedAnnotation {
+            if (annotation.id in visitedIds) return annotation.copy(replies = emptyList())
+            val nextVisited = visitedIds + annotation.id
+            val replies = childrenByParentId[annotation.id]
+                .orEmpty()
+                .map { attachReplies(it, nextVisited) }
+            return annotation.copy(replies = annotation.replies + replies)
+        }
+
+        val groupedRoots = mutableListOf<MutableList<SharedPdfEmbeddedAnnotation>>()
+        roots.map { attachReplies(it) }.forEach { annotation ->
+            val group = groupedRoots.firstOrNull { existingGroup ->
+                existingGroup.firstOrNull()?.bounds?.inflatedBy(geometryTolerance)?.intersects(annotation.bounds) == true
+            }
+            if (group == null) {
+                groupedRoots += mutableListOf(annotation)
+            } else {
+                group += annotation
+            }
+        }
+
+        return groupedRoots
+            .mapNotNull { group ->
+                val root = group.firstOrNull() ?: return@mapNotNull null
+                root.copy(replies = root.replies + group.drop(1))
+            }
+            .filter { it.hasVisibleText }
+    }
+}
 
 data class PdfToolConfig(
     val colorArgb: Int,
@@ -61,10 +142,10 @@ data class PdfToolConfig(
 
 object SharedPdfAnnotationDefaults {
     val penPalette: List<Int> = listOf(
-        0xFF111111.toInt(),
-        0xFFD32F2F.toInt(),
-        0xFF1976D2.toInt(),
-        0xFF388E3C.toInt(),
+        0xFF000000.toInt(),
+        0xFFFF0000.toInt(),
+        0xFF0000FF.toInt(),
+        0xFF4CAF50.toInt(),
         0xFFFFFFFF.toInt()
     )
 
@@ -78,13 +159,13 @@ object SharedPdfAnnotationDefaults {
 
     fun configFor(tool: PdfInkTool): PdfToolConfig {
         return when (tool) {
-            PdfInkTool.PEN -> PdfToolConfig(0xFF111111.toInt(), 2.5f)
-            PdfInkTool.FOUNTAIN_PEN -> PdfToolConfig(0xFF111111.toInt(), 3.5f)
-            PdfInkTool.PENCIL -> PdfToolConfig(0xFF616161.toInt(), 1.8f)
-            PdfInkTool.HIGHLIGHTER -> PdfToolConfig(0x8CFFEB3B.toInt(), 12f)
-            PdfInkTool.HIGHLIGHTER_ROUND -> PdfToolConfig(0x8CFF9800.toInt(), 16f)
-            PdfInkTool.ERASER -> PdfToolConfig(0x00000000, 18f)
-            PdfInkTool.TEXT -> PdfToolConfig(0xFF111111.toInt(), 1f)
+            PdfInkTool.PEN -> PdfToolConfig(0xFFFF0000.toInt(), 0.008f)
+            PdfInkTool.FOUNTAIN_PEN -> PdfToolConfig(0xFF0000FF.toInt(), 0.008f)
+            PdfInkTool.PENCIL -> PdfToolConfig(0xFF444444.toInt(), 0.008f)
+            PdfInkTool.HIGHLIGHTER -> PdfToolConfig(0x8CFF9800.toInt(), 0.035f)
+            PdfInkTool.HIGHLIGHTER_ROUND -> PdfToolConfig(0x8CFFEB3B.toInt(), 0.035f)
+            PdfInkTool.ERASER -> PdfToolConfig(0x00000000, 0.03f)
+            PdfInkTool.TEXT -> PdfToolConfig(0xFF000000.toInt(), 0.02f)
         }
     }
 }
@@ -114,6 +195,22 @@ object SharedPdfAnnotationSerializer {
             runCatching { json.decodeFromString<List<SharedPdfAnnotation>>(raw) }.getOrDefault(emptyList())
         }
     }
+}
+
+private fun PdfPageBounds.inflatedBy(amount: Float): PdfPageBounds {
+    return PdfPageBounds(
+        left = (left - amount).coerceAtLeast(0f),
+        top = (top - amount).coerceAtLeast(0f),
+        right = (right + amount).coerceAtMost(1f),
+        bottom = (bottom + amount).coerceAtMost(1f)
+    )
+}
+
+private fun PdfPageBounds.intersects(other: PdfPageBounds): Boolean {
+    return left <= other.right &&
+        right >= other.left &&
+        top <= other.bottom &&
+        bottom >= other.top
 }
 
 data class PdfZoomSpec(

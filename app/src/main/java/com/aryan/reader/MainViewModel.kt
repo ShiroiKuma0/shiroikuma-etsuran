@@ -53,6 +53,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.aryan.reader.data.BookMetadata
 import com.aryan.reader.data.CloudflareRepository
 import com.aryan.reader.data.CustomFontEntity
 import com.aryan.reader.data.FeedbackRepository
@@ -83,8 +84,8 @@ import com.aryan.reader.paginatedreader.Locator
 import com.aryan.reader.paginatedreader.data.BookCacheDatabase
 import com.aryan.reader.paginatedreader.data.BookProcessingWorker
 import com.aryan.reader.pdf.PdfCoverGenerator
-import com.aryan.reader.pdf.PdfExporter
 import com.aryan.reader.pdf.PdfUserHighlight
+import com.aryan.reader.pdf.PdfiumAnnotationExporter
 import com.aryan.reader.pdf.ReflowWorker
 import com.aryan.reader.pdf.data.PageLayoutRepository
 import com.aryan.reader.pdf.data.PdfAnnotation
@@ -94,7 +95,9 @@ import com.aryan.reader.pdf.data.PdfTextBox
 import com.aryan.reader.pdf.data.PdfTextBoxRepository
 import com.aryan.reader.pdf.data.PdfTextRepository
 import com.aryan.reader.pdf.data.VirtualPage
-import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.aryan.reader.shared.SharedLibraryEditor
+import com.aryan.reader.shared.pdf.SHARED_PDF_RICH_TEXT_LOG_TAG
+import com.aryan.reader.shared.pdf.SharedPdfAnnotationSidecarCodec
 import io.legere.pdfiumandroid.PdfiumCore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -709,27 +712,28 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun createAndAssignTag(name: String, bookIds: Set<String>) {
-        val trimmedName = name.trim()
-        if (trimmedName.isBlank() || bookIds.isEmpty()) return
+        val sanitizedBookIds = SharedLibraryEditor.cleanBookIds(bookIds)
+        if (sanitizedBookIds.isEmpty()) return
 
         viewModelScope.launch {
             val tagId = UUID.randomUUID().toString()
             val colors = listOf(0xFFE57373, 0xFFF06292, 0xFFBA68C8, 0xFF9575CD, 0xFF7986CB, 0xFF64B5F6, 0xFF4FC3F7, 0xFF4DD0E1, 0xFF4DB6AC, 0xFF81C784, 0xFFAED581, 0xFFFF8A65, 0xFFA1887F, 0xFF90A4AE)
             val color = colors.random().toInt()
-
-            val tag = TagEntity(tagId, trimmedName, color, System.currentTimeMillis())
+            val now = System.currentTimeMillis()
+            val tag = SharedLibraryEditor.createTag(name, tagId, color)?.toTagEntity(now) ?: return@launch
             recentFilesRepository.createTag(tag)
 
-            bookIds.forEach { bookId ->
+            sanitizedBookIds.forEach { bookId ->
                 recentFilesRepository.assignTagToBook(bookId, tagId)
             }
         }
     }
 
     fun toggleTagForBooks(tagId: String, bookIds: Set<String>, assign: Boolean) {
-        if (tagId.isBlank() || bookIds.isEmpty()) return
+        val sanitizedBookIds = SharedLibraryEditor.cleanBookIds(bookIds)
+        if (tagId.isBlank() || sanitizedBookIds.isEmpty()) return
         viewModelScope.launch {
-            bookIds.forEach { bookId ->
+            sanitizedBookIds.forEach { bookId ->
                 if (assign) {
                     recentFilesRepository.assignTagToBook(bookId, tagId)
                 } else {
@@ -1093,9 +1097,6 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 recentFilesRepository.seedTagsIfEmpty(buildDefaultTags())
                 prefs.edit { putBoolean(KEY_DEFAULT_TAGS_SEEDED, true) }
             }
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            PDFBoxResourceLoader.init(getApplication())
         }
         val currentOpenCount = prefs.getInt(KEY_APP_OPEN_COUNT, 0)
         prefs.edit { putInt(KEY_APP_OPEN_COUNT, currentOpenCount + 1) }
@@ -1779,7 +1780,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 val virtualPages = pageLayoutRepository.getLayoutOrNull(bookId)
                 val outputStream = appContext.contentResolver.openOutputStream(destUri)
                 if (outputStream != null) {
-                    PdfExporter.exportAnnotatedPdf(
+                    PdfiumAnnotationExporter.exportAnnotatedPdf(
                         context = appContext,
                         sourceUri = sourceUri,
                         destStream = outputStream,
@@ -1889,24 +1890,24 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 }
 
                 val destFile = File(shareDir, filename)
-                val outputStream = FileOutputStream(destFile)
+                FileOutputStream(destFile).use { outputStream ->
+                    if (includeAnnotations) {
+                        val virtualPages = pageLayoutRepository.getLayoutOrNull(resolvedBookId)
 
-                if (includeAnnotations) {
-                    val virtualPages = pageLayoutRepository.getLayoutOrNull(resolvedBookId)
-
-                    PdfExporter.exportAnnotatedPdf(
-                        context = appContext,
-                        sourceUri = sourceUri,
-                        destStream = outputStream,
-                        virtualPages = virtualPages,
-                        inkAnnotations = annotations,
-                        richTextPageLayouts = richTextPageLayouts,
-                        textBoxes = textBoxes,
-                        highlights = highlights
-                    )
-                } else {
-                    appContext.contentResolver.openInputStream(sourceUri)?.use { input ->
-                        input.copyTo(outputStream)
+                        PdfiumAnnotationExporter.exportAnnotatedPdf(
+                            context = appContext,
+                            sourceUri = sourceUri,
+                            destStream = outputStream,
+                            virtualPages = virtualPages,
+                            inkAnnotations = annotations,
+                            richTextPageLayouts = richTextPageLayouts,
+                            textBoxes = textBoxes,
+                            highlights = highlights
+                        )
+                    } else {
+                        appContext.contentResolver.openInputStream(sourceUri)?.use { input ->
+                            input.copyTo(outputStream)
+                        }
                     }
                 }
 
@@ -1953,6 +1954,11 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
             Timber.d("Skipping metadata sync for local folder book: ${book.displayName}")
             return
         }
+
+        if (book.isManualOnlyReaderFile()) {
+            Timber.d("Skipping metadata sync for manual-only reader file: ${book.displayName}")
+            return
+        }
         val currentUser = uiState.value.currentUser ?: return
 
         viewModelScope.launch {
@@ -1972,6 +1978,10 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 val hasTextBoxes = textBoxFile.exists()
                 val hasHighlights = highlightFile.exists()
                 val hasAnyData = hasInk || hasRichText || hasLayout || hasTextBoxes || hasHighlights
+                Timber.tag(SHARED_PDF_RICH_TEXT_LOG_TAG).d(
+                    "android.cloud.export candidates book=${book.bookId} hasRichText=$hasRichText " +
+                        "richBytes=${if (hasRichText) richTextFile.length() else 0L} hasAnyData=$hasAnyData"
+                )
 
                 if (hasAnyData) {
                     if (googleDriveRepository.hasDrivePermissions(appContext)) {
@@ -1985,12 +1995,22 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                                 if (file == null || !file.exists()) return
                                 try {
                                     val content = file.readText().trim()
+                                    if (key == "text") {
+                                        Timber.tag(SHARED_PDF_RICH_TEXT_LOG_TAG).d(
+                                            "android.cloud.export.readRichText book=${book.bookId} rawLen=${content.length} " +
+                                                "file=${file.absolutePath}"
+                                        )
+                                    }
                                     if (content.startsWith("[")) {
                                         bundleJson.put(key, JSONArray(content))
                                     } else if (content.startsWith("{")) {
                                         bundleJson.put(key, JSONObject(content))
                                     }
                                 } catch (e: Exception) {
+                                    if (key == "text") {
+                                        Timber.tag(SHARED_PDF_RICH_TEXT_LOG_TAG)
+                                            .e(e, "android.cloud.export.richTextParseFailed book=${book.bookId}")
+                                    }
                                     Timber.e(e, "Failed to parse local $key file")
                                 }
                             }
@@ -2003,7 +2023,14 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
                             val bundleFile =
                                 File(appContext.cacheDir, "sync_bundle_${book.bookId}.json")
-                            bundleFile.writeText(bundleJson.toString())
+                            val canonicalBundle = SharedPdfAnnotationSidecarCodec.canonicalizeDataJson(bundleJson.toString())
+                            bundleFile.writeText(canonicalBundle)
+                            if (hasRichText) {
+                                Timber.tag(SHARED_PDF_RICH_TEXT_LOG_TAG).d(
+                                    "android.cloud.export.bundleReady book=${book.bookId} canonicalLen=${canonicalBundle.length} " +
+                                        "bundleFile=${bundleFile.absolutePath}"
+                                )
+                            }
 
                             val uploaded = googleDriveRepository.uploadAnnotationFile(
                                 accessToken, book.bookId, bundleFile
@@ -2011,9 +2038,17 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                             bundleFile.delete()
 
                             if (uploaded != null) {
+                                if (hasRichText) {
+                                    Timber.tag(SHARED_PDF_RICH_TEXT_LOG_TAG)
+                                        .d("android.cloud.export.uploadSuccess book=${book.bookId} driveId=${uploaded.id}")
+                                }
                                 Timber.tag("AnnotationSync")
                                     .d("Bundle upload SUCCESS. ID: ${uploaded.id}")
                             } else {
+                                if (hasRichText) {
+                                    Timber.tag(SHARED_PDF_RICH_TEXT_LOG_TAG)
+                                        .e("android.cloud.export.uploadFailed book=${book.bookId}")
+                                }
                                 Timber.tag("AnnotationSync")
                                     .e("Bundle upload FAILED. Skipping Firestore sync to prevent data loss.")
                                 return@launch
@@ -2204,7 +2239,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
             while (nextIdx < totalChapters) {
                 Timber.tag("TTS_BG_ADVANCE").d("Trying chapter $nextIdx natively.")
-                val nativeChunks = locatorConverter.getTtsChunksForChapter(book, nextIdx)
+                val nativeChunks = locatorConverter.getTtsChunksForChapter(book, nextIdx, bookId)
 
                 if (!nativeChunks.isNullOrEmpty()) {
                     val token = getAuthToken()
@@ -2231,7 +2266,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                     // Save reading position locally
                     val cfi = nativeChunks.firstOrNull()?.sourceCfi
                     if (cfi != null) {
-                        val locator = locatorConverter.getLocatorFromCfi(book, nextIdx, cfi)
+                        val locator = locatorConverter.getLocatorFromCfi(book, nextIdx, cfi, bookId)
                         if (locator != null) {
                             recentFilesRepository.getFileByBookId(bookId)?.uriString?.let { uriString ->
                                 recentFilesRepository.updateEpubReadingPosition(uriString, locator, cfi, 0f)
@@ -2872,24 +2907,27 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 } else {
                     allFiles.filter { it.sourceFolderUri == null }
                 }
-                filtered.filterNot { it.uriString?.startsWith("opds-pse") == true }
+                filtered
+                    .filterNot { it.uriString?.startsWith("opds-pse") == true }
+                    .filterNot { it.isManualOnlyReaderFile() }
             }
 
             val localShelfNames = prefs.getStringSet(KEY_SHELVES, emptySet()).orEmpty()
+            val remoteBooks = remoteBooksDeferred.await()
+                .filterNot { it.isManualOnlyReaderFile() }
+            val remoteShelves = remoteShelvesDeferred.await()
+            val syncableBookIds = (localBooks.map { it.bookId } + remoteBooks.map { it.bookId }).toSet()
             val allKnownShelfNames =
-                (localShelfNames + remoteShelvesDeferred.await().map { it.name }).toSet()
+                (localShelfNames + remoteShelves.map { it.name }).toSet()
             val localShelves = allKnownShelfNames.mapNotNull { name ->
                 val timestamp = prefs.getLong("$KEY_SHELF_TIMESTAMP_PREFIX$name", 0L)
                 if (timestamp == 0L && name !in localShelfNames) return@mapNotNull null
                 val bookIds = prefs.getStringSet(
                     "$KEY_SHELF_CONTENT_PREFIX$name", emptySet()
-                ).orEmpty().toList()
+                ).orEmpty().filter { it in syncableBookIds }
                 val isDeleted = prefs.getBoolean("$KEY_SHELF_DELETED_PREFIX$name", false)
                 ShelfMetadata(name, bookIds, timestamp, isDeleted)
             }
-
-            val remoteBooks = remoteBooksDeferred.await()
-            val remoteShelves = remoteShelvesDeferred.await()
 
             // 3. Merge Books
             val localBooksMap = localBooks.associateBy { it.bookId }
@@ -2985,7 +3023,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                                 currentShelves.add(remote.name)
                                 putStringSet(
                                     "$KEY_SHELF_CONTENT_PREFIX${remote.name}",
-                                    remote.bookIds.toSet()
+                                    remote.bookIds.filter { it in syncableBookIds }.toSet()
                                 )
                             }
                             putStringSet(KEY_SHELVES, currentShelves)
@@ -3014,7 +3052,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                                     currentShelves.add(remote.name)
                                     putStringSet(
                                         "$KEY_SHELF_CONTENT_PREFIX${remote.name}",
-                                        remote.bookIds.toSet()
+                                        remote.bookIds.filter { it in syncableBookIds }.toSet()
                                     )
                                 }
                                 putStringSet(KEY_SHELVES, currentShelves)
@@ -3033,7 +3071,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
             val finalMergedBooks = withContext(Dispatchers.IO) {
                 recentFilesRepository.getAllFilesForSync()
-            }
+            }.filterNot { it.isManualOnlyReaderFile() }
             val remoteFiles = withContext(Dispatchers.IO) {
                 googleDriveRepository.getFiles(accessToken)?.files.orEmpty().associateBy { it.name }
             }
@@ -3100,11 +3138,20 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
             try {
                 val jsonString = tempDownloadFile.readText()
+                Timber.tag(SHARED_PDF_RICH_TEXT_LOG_TAG).d(
+                    "android.cloud.import.downloaded book=$bookId rawLen=${jsonString.length}"
+                )
 
                 // Determine format
                 val isBundle = try {
                     val obj = JSONObject(jsonString)
-                    obj.has("version") || obj.has("ink") || obj.has("text") || obj.has("layout")
+                    obj.has("version") ||
+                        obj.has(SharedPdfAnnotationSidecarCodec.KEY_PDF_ANNOTATIONS) ||
+                        obj.has("ink") ||
+                        obj.has("text") ||
+                        obj.has("layout") ||
+                        obj.has("textBoxes") ||
+                        obj.has("highlights")
                 } catch (_: Exception) {
                     false
                 }
@@ -3124,13 +3171,29 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 highlightFile.parentFile?.mkdirs()
 
                 if (isBundle) {
-                    val bundle = JSONObject(jsonString)
+                    val bundle = JSONObject(
+                        SharedPdfAnnotationSidecarCodec.legacyAndroidDataJsonFromCanonical(jsonString)
+                    )
+                    Timber.tag(SHARED_PDF_RICH_TEXT_LOG_TAG).d(
+                        "android.cloud.import.bundle book=$bookId hasRichText=${bundle.has("text")} keys=${bundle.keys().asSequence().toList()}"
+                    )
 
                     fun writeSafe(key: String, file: File) {
                         if (bundle.has(key)) {
                             file.parentFile?.mkdirs()
-                            file.writeText(bundle.get(key).toString())
+                            val content = bundle.get(key).toString()
+                            file.writeText(content)
+                            if (key == "text") {
+                                Timber.tag(SHARED_PDF_RICH_TEXT_LOG_TAG).d(
+                                    "android.cloud.import.writeRichText book=$bookId rawLen=${content.length} file=${file.absolutePath}"
+                                )
+                            }
                         } else {
+                            if (key == "text" && file.exists()) {
+                                Timber.tag(SHARED_PDF_RICH_TEXT_LOG_TAG).d(
+                                    "android.cloud.import.deleteMissingRichText book=$bookId file=${file.absolutePath}"
+                                )
+                            }
                             if (file.exists()) file.delete()
                         }
                     }
@@ -4592,21 +4655,13 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun createShelf(name: String) {
-        if (name.isNotBlank()) {
-            viewModelScope.launch {
-                val shelfId = UUID.randomUUID().toString()
-                val shelf = com.aryan.reader.data.ShelfEntity(
-                    id = shelfId,
-                    name = name,
-                    isSmart = false,
-                    smartRulesJson = null,
-                    createdAt = System.currentTimeMillis(),
-                    updatedAt = System.currentTimeMillis()
-                )
-                recentFilesRepository.addShelf(shelf)
-                dismissCreateShelfDialog()
-                syncShelfChangeToFirestore(shelfId)
-            }
+        val shelfId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        val shelf = SharedLibraryEditor.createShelfRecord(name, shelfId)?.toShelfEntity(now) ?: return
+        viewModelScope.launch {
+            recentFilesRepository.addShelf(shelf)
+            dismissCreateShelfDialog()
+            syncShelfChangeToFirestore(shelfId)
         }
     }
 
@@ -4651,12 +4706,13 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun renameShelf(shelfId: String, newName: String) {
-        if (shelfId.isBlank() || newName.isBlank()) {
+        val cleanName = SharedLibraryEditor.cleanShelfName(newName)
+        if (!SharedLibraryEditor.canMutateShelf(shelfId) || cleanName == null) {
             dismissRenameShelfDialog()
             return
         }
         viewModelScope.launch {
-            recentFilesRepository.renameShelf(shelfId, newName)
+            recentFilesRepository.renameShelf(shelfId, cleanName)
             syncShelfChangeToFirestore(shelfId)
             _internalState.update { it.copy(viewingShelfId = shelfId) }
             persistLibraryLandingState()
@@ -4665,7 +4721,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun deleteShelf(shelfId: String) {
-        if (shelfId.isBlank() || shelfId == "unshelved") {
+        if (!SharedLibraryEditor.canMutateShelf(shelfId)) {
             dismissDeleteShelfDialog()
             return
         }
@@ -4697,21 +4753,22 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun removeContextualItemsFromShelf() {
         val shelfId = _internalState.value.viewingShelfId
-        if (shelfId.isNullOrBlank() || shelfId == "unshelved") {
+        if (!SharedLibraryEditor.canMutateShelf(shelfId)) {
             clearContextualAction()
             return
         }
+        val targetShelfId = shelfId ?: return
 
-        val bookIdsToRemove = _internalState.value.contextualActionItems.map { it.bookId }
+        val bookIdsToRemove = SharedLibraryEditor.cleanBookIds(_internalState.value.contextualActionItems.map { it.bookId })
         if (bookIdsToRemove.isEmpty()) {
             clearContextualAction()
             return
         }
 
         viewModelScope.launch {
-            recentFilesRepository.removeBooksFromShelf(shelfId, bookIdsToRemove)
+            recentFilesRepository.removeBooksFromShelf(targetShelfId, bookIdsToRemove.toList())
             clearContextualAction()
-            syncShelfChangeToFirestore(shelfId)
+            syncShelfChangeToFirestore(targetShelfId)
         }
     }
 
@@ -4755,6 +4812,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun deleteSelectedShelves() {
         val shelvesToDelete = _internalState.value.contextualActionShelfIds
+            .filterTo(mutableSetOf()) { SharedLibraryEditor.canMutateShelf(it) }
         if (shelvesToDelete.isEmpty()) {
             clearShelfContextualAction()
             return
@@ -4788,7 +4846,11 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
             val db = com.aryan.reader.data.AppDatabase.getDatabase(appContext)
             val shelf = db.shelfDao().getShelfById(shelfId) ?: return@launch
             val crossRefs = db.shelfDao().getCrossRefsForShelf(shelfId)
+            val manualOnlyBookIds = recentFilesRepository.getAllFilesForSync()
+                .filter { it.isManualOnlyReaderFile() }
+                .mapTo(mutableSetOf()) { it.bookId }
             val bookIds = crossRefs.map { it.bookId }
+                .filterNot { it in manualOnlyBookIds }
 
             val shelfMetadata = ShelfMetadata(
                 name = shelf.name,
@@ -4814,8 +4876,8 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun addBooksToShelf(shelfId: String) {
-        val bookIdsToAdd = _internalState.value.booksSelectedForAdding
-        if (bookIdsToAdd.isEmpty()) {
+        val bookIdsToAdd = SharedLibraryEditor.cleanBookIds(_internalState.value.booksSelectedForAdding)
+        if (!SharedLibraryEditor.canMutateShelf(shelfId) || bookIdsToAdd.isEmpty()) {
             dismissAddBooksToShelf()
             return
         }
@@ -4943,6 +5005,12 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                                     .associateBy { it.name }
 
                                 for (item in managedBooks) {
+                                    if (item.isManualOnlyReaderFile()) {
+                                        cleanupBookDataLocally(item.bookId)
+                                        recentFilesRepository.deleteFilePermanently(listOf(item.bookId))
+                                        continue
+                                    }
+
                                     recentFilesRepository.markAsDeleted(listOf(item.bookId))
                                     cleanupBookDataLocally(item.bookId)
 
@@ -5461,4 +5529,12 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
             "text/x-csharp", "text/x-ruby", "text/x-go", "text/x-log"
         )
     }
+}
+
+private fun RecentFileItem.isManualOnlyReaderFile(): Boolean {
+    return isManualOnlyReaderFileName(displayName)
+}
+
+private fun BookMetadata.isManualOnlyReaderFile(): Boolean {
+    return isManualOnlyReaderFileName(displayName)
 }
