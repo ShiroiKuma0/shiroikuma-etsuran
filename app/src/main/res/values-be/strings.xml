@@ -131,4 +131,23 @@
     <string name="clear_all">Ачысціць усё</string>
     <string name="filter_in_app_storage">Сховішча праграмы</string>
     <string name="external_file_prompt_title">Захаваць файл?</string>
+    <string name="external_file_prompt_desc">Жадаеце захаваць гэты вонкавы файл у бібліятэцы праграмы? Калі не, ён будзе выдалены.\n\n(Вы можаце змяніць гэта ў любы час праз Галоўны экран &gt; Іншыя параметры &gt; Паводзіны пры вонкавых файлах).</string>
+    <string name="external_file_dont_ask">Больш не пытацца</string>
+    <string name="external_file_keep">Захаваць у бібліятэцы</string>
+    <string name="external_file_delete">Прыбраць</string>
+    <string name="external_file_behavior_ask">Заўсёды пытацца</string>
+    <string name="external_file_behavior_keep">Заўсёды захоўваць</string>
+    <string name="external_file_behavior_delete">Заўсёды прыбіраць</string>
+    <string name="options_external_file_behavior">Паводзіны пры вонкавых файлах</string>
+    <string name="fab_add_catalog">Дадаць каталог</string>
+    <string name="search_catalog_placeholder">Пошук праз каталог…</string>
+    <string name="feed_empty">Стужка пустая.</string>
+    <string name="status_downloading">Спампоўванне…</string>
+    <string name="status_loading">Загрузка…</string>
+    <string name="action_stream">Плынь</string>
+    <string name="action_unavailable">Недаступна</string>
+    <string name="action_download">Спампавана</string>
+    <string name="download_format">Фармат спампоўкі</string>
+    <string name="action_stream_now">Запусціць плынь</string>
+    <string name="action_read">Чытаць</string>
 </resources>
