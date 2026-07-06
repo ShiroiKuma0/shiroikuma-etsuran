@@ -165,16 +165,15 @@ fun SettingsScreen(
         },
         contentWindowInsets = WindowInsets.navigationBars
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-        if (settingsDestination == SharedSettingsDestination.ROOT && query.isBlank()) {
-            WhiteBearSettingsEntryRow(
-                onClick = { navController.navigate(AppDestinations.WHITE_BEAR_UI_SCREEN_ROUTE) }
-            )
-        }
         SharedSettingsHub(
             model = settingsModel,
             query = query,
             onQueryChange = { query = it },
+            belowSearchContent = {
+                WhiteBearSettingsEntryRow(
+                    onClick = { navController.navigate(AppDestinations.WHITE_BEAR_UI_SCREEN_ROUTE) }
+                )
+            },
             readerDefaultSettings = epubReaderDefaults,
             onReaderDefaultSettingsChange = { settings ->
                 epubReaderDefaults = settings
@@ -195,7 +194,7 @@ fun SettingsScreen(
             showTopBar = false,
             destination = settingsDestination,
             onDestinationChange = { settingsDestination = it },
-            contentPadding = PaddingValues(0.dp),
+            contentPadding = padding,
             modifier = Modifier.fillMaxSize(),
             onAction = { action ->
                 when (action) {
@@ -265,7 +264,6 @@ fun SettingsScreen(
                 }
             }
         )
-        }
     }
 
     if (showRecentLimitDialog) {

@@ -436,6 +436,7 @@ fun LibraryScreen(
             },
             onDeleteCatalogStreams = viewModel::deleteStreamedBooksForCatalog,
             onSettingsClick = { navController.navigate(AppDestinations.SETTINGS_SCREEN_ROUTE) },
+            onSettingsLongClick = { navController.navigate(AppDestinations.WHITE_BEAR_UI_SCREEN_ROUTE) },
             usePdfFileNameAsDisplayName = uiState.usePdfFileNameAsDisplayName
         )
 
@@ -754,6 +755,7 @@ fun LibraryScreenContent(
     onStreamOpdsBook: (OpdsEntry, OpdsCatalog?) -> Unit,
     onDeleteCatalogStreams: (String) -> Unit,
     onSettingsClick: () -> Unit,
+    onSettingsLongClick: () -> Unit = {},
     usePdfFileNameAsDisplayName: Boolean,
 ) {
     val isBookContextualModeActive = selectedItems.isNotEmpty()
@@ -969,7 +971,17 @@ fun LibraryScreenContent(
                                     Icon(Icons.Default.Search, contentDescription = stringResource(R.string.action_search))
                                 }
                             }
-                            IconButton(onClick = onSettingsClick) {
+                            // Long-press opens the 白い熊 書籍閲覧 UI page directly.
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .combinedClickable(
+                                        onClick = onSettingsClick,
+                                        onLongClick = onSettingsLongClick
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
                                 Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings))
                             }
                         }
