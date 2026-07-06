@@ -93,7 +93,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.border
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.ui.graphics.Color
+import com.aryan.reader.whitebear.LocalWhiteBearBorderWidth
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -603,7 +606,14 @@ fun ReaderTextFormatPanel(
     if (isVisible) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+        // 白い熊 UI: border around the visible sheet. It is drawn on the content (with our
+        // own drag handle inside) — a border on the ModalBottomSheet modifier would outline
+        // its full-height container instead of the sheet.
+        val whiteBearBorder = LocalWhiteBearBorderWidth.current
+        val sheetShape = BottomSheetDefaults.ExpandedShape
         ModalBottomSheet(
+            shape = sheetShape,
+            dragHandle = null,
             onDismissRequest = onClose,
             sheetState = sheetState,
             scrimColor = Color.Transparent,
@@ -613,6 +623,17 @@ fun ReaderTextFormatPanel(
             val configuration = LocalConfiguration.current
             val maxSheetHeight = (configuration.screenHeightDp * 0.7f).dp
 
+            Column(
+                modifier = if (whiteBearBorder > 0.dp) {
+                    Modifier
+                        .fillMaxWidth()
+                        .border(whiteBearBorder, MaterialTheme.colorScheme.outline, sheetShape)
+                } else {
+                    Modifier.fillMaxWidth()
+                },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+            BottomSheetDefaults.DragHandle()
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -807,8 +828,8 @@ fun ReaderTextFormatPanel(
                         label = stringResource(R.string.label_line_height),
                         value = currentLineHeight,
                         onValueChange = onLineHeightChange,
-                        valueRange = 1.0f..3.0f,
-                        formatValue = { if (it <= 1.01f) originalLabel else "%.1fx".format(it) }
+                        valueRange = 0.3f..3.0f,
+                        formatValue = { "%.1fx".format(it) }
                     )
 
                     FormatSlider(
@@ -855,6 +876,7 @@ fun ReaderTextFormatPanel(
                         }
                     )
                 }
+            }
             }
         }
     }
