@@ -1,9 +1,12 @@
 package com.aryan.reader
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import android.content.Context
@@ -66,6 +69,8 @@ import com.aryan.reader.shared.sharedSettingsHubModel
 import com.aryan.reader.shared.toReaderSettings
 import com.aryan.reader.shared.ui.SharedSettingsHub
 import com.aryan.reader.tts.loadTtsMode
+import com.aryan.reader.whitebear.WhiteBearSettingsEntryRow
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -160,6 +165,12 @@ fun SettingsScreen(
         },
         contentWindowInsets = WindowInsets.navigationBars
     ) { padding ->
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+        if (settingsDestination == SharedSettingsDestination.ROOT && query.isBlank()) {
+            WhiteBearSettingsEntryRow(
+                onClick = { navController.navigate(AppDestinations.WHITE_BEAR_UI_SCREEN_ROUTE) }
+            )
+        }
         SharedSettingsHub(
             model = settingsModel,
             query = query,
@@ -184,7 +195,7 @@ fun SettingsScreen(
             showTopBar = false,
             destination = settingsDestination,
             onDestinationChange = { settingsDestination = it },
-            contentPadding = padding,
+            contentPadding = PaddingValues(0.dp),
             modifier = Modifier.fillMaxSize(),
             onAction = { action ->
                 when (action) {
@@ -254,6 +265,7 @@ fun SettingsScreen(
                 }
             }
         )
+        }
     }
 
     if (showRecentLimitDialog) {
