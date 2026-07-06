@@ -65,6 +65,7 @@ import com.aryan.reader.feedback.SupportProjectScreen
 import com.aryan.reader.pdf.PdfViewerScreen
 import com.aryan.reader.shared.ReaderFeatureSurface
 import com.aryan.reader.tts.ReaderTtsMiniBar
+import com.aryan.reader.whitebear.WhiteBearUiScreen
 import com.aryan.reader.tts.readerTtsMiniBarBottomPaddingDp
 import com.aryan.reader.tts.shouldShowReaderTtsMiniBar
 import kotlinx.coroutines.delay
@@ -79,6 +80,7 @@ object AppDestinations {
     const val FONTS_SCREEN_ROUTE = "fonts_screen_route"
     const val AI_SETTINGS_SCREEN_ROUTE = "ai_settings_screen_route"
     const val SETTINGS_SCREEN_ROUTE = "settings_screen_route"
+    const val WHITE_BEAR_UI_SCREEN_ROUTE = "white_bear_ui_screen_route"
 }
 
 fun shouldInterceptAppNavBack(
@@ -445,6 +447,13 @@ fun AppNavigation(
             SettingsScreen(
                 viewModel = viewModel,
                 navController = navController,
+                onBackClick = { navController.popBackStackIfReady() }
+            )
+        }
+
+        composable(route = AppDestinations.WHITE_BEAR_UI_SCREEN_ROUTE) {
+            WhiteBearUiScreen(
+                viewModel = viewModel,
                 onBackClick = { navController.popBackStackIfReady() }
             )
         }

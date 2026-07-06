@@ -452,6 +452,9 @@ fun HomeScreen(
                                 onSettingsClick = {
                                     navController.navigate(AppDestinations.SETTINGS_SCREEN_ROUTE)
                                 },
+                                onSettingsLongClick = {
+                                    navController.navigate(AppDestinations.WHITE_BEAR_UI_SCREEN_ROUTE)
+                                },
                                 onTestPanelDetectionClick = { viewModel.testPanelDetection(context) },
                                 onTestSpeechBubbleDetectionClick = { viewModel.testSpeechBubbleDetection(context) },
                                 onLanguageClick = { showLanguageDialog = true },
@@ -1149,6 +1152,7 @@ private fun CoverProgressBadge(
 }
 
 @Suppress("unused", "KotlinConstantConditions")
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DefaultTopAppBar(
     uiState: ReaderScreenState,
@@ -1167,6 +1171,7 @@ fun DefaultTopAppBar(
     onUsePdfFileNameAsDisplayNameToggle: () -> Unit,
     onAppThemeClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onSettingsLongClick: () -> Unit = {},
     onTestPanelDetectionClick: () -> Unit,
     onTestSpeechBubbleDetectionClick: () -> Unit,
     onLanguageClick: () -> Unit,
@@ -1191,7 +1196,17 @@ fun DefaultTopAppBar(
             }
         }
     }, actions = {
-        IconButton(onClick = onSettingsClick) {
+        // Long-press opens the 白い熊 書籍閲覧 UI page directly.
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .combinedClickable(
+                    onClick = onSettingsClick,
+                    onLongClick = onSettingsLongClick
+                ),
+            contentAlignment = Alignment.Center
+        ) {
             Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings))
         }
         Box {

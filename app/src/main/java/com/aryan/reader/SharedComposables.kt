@@ -45,6 +45,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import com.aryan.reader.data.TagEntity
+import com.aryan.reader.whitebear.LocalWhiteBearBorderWidth
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -483,31 +484,38 @@ fun CustomTopAppBar(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shadowElevation = 2.dp
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .height(56.dp)
-                .padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            navigationIcon()
-
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 12.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                ProvideTextStyle(value = MaterialTheme.typography.titleLarge) {
-                    title()
-                }
-            }
+        Column {
             Row(
-                horizontalArrangement = Arrangement.End,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .height(56.dp)
+                    .padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                actions()
+                navigationIcon()
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    ProvideTextStyle(value = MaterialTheme.typography.titleLarge) {
+                        title()
+                    }
+                }
+                Row(
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    actions()
+                }
+            }
+            // 白い熊 UI: rule under the bar in the border color; width 0 removes it.
+            val whiteBearRule = LocalWhiteBearBorderWidth.current
+            if (whiteBearRule > 0.dp) {
+                HorizontalDivider(thickness = whiteBearRule, color = MaterialTheme.colorScheme.outline)
             }
         }
     }
@@ -1529,7 +1537,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                         },
                         text = stringResource(R.string.about_github),
                         subtitle = stringResource(R.string.about_github_desc),
-                        onClick = { uriHandler.openUri("https://github.com/Aryan-Raj3112/episteme") }
+                        onClick = { uriHandler.openUri("https://github.com/ShiroiKuma0/shiroikuma-shosekietsuran") }
                     )
 
                     Spacer(modifier = Modifier.height(10.dp))
