@@ -73,7 +73,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "shiroikuma.etsuran"
+        applicationId = "shiroikuma.shosekietsuran"
         minSdk = 26
         targetSdk = 35
         versionCode = 55
@@ -84,7 +84,7 @@ android {
         versionName = "$versionName+$forkBuildNumber"
         versionCode = versionCode!! * 10000 + forkBuildNumber
 
-        // shiroikuma fork: single-ABI build (matches the shiroikuma-etsuran_*_arm64-v8a.apk name).
+        // shiroikuma fork: single-ABI build (matches the shiroikuma-shosekietsuran_*_arm64-v8a.apk name).
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -107,7 +107,7 @@ android {
         create("oss") {
             dimension = "version"
             // shiroikuma fork: no ".oss" appId / "-oss" versionName suffix — the installed
-            // id must be exactly shiroikuma.etsuran, the version exactly "<upstream>+N".
+            // id must be exactly shiroikuma.shosekietsuran, the version exactly "<upstream>+N".
             buildConfigField("String", "AI_WORKER_URL", "\"\"")
             buildConfigField("String", "VERIFIER_WORKER_URL", "\"\"")
             buildConfigField("String", "FEEDBACK_WORKER_URL", "\"\"")
@@ -170,9 +170,9 @@ android {
 
             // shiroikuma fork: our filename convention (release drops the buildType tail).
             output.outputFileName = if (buildType == "release") {
-                "shiroikuma-etsuran_${version}_arm64-v8a.apk"
+                "shiroikuma-shosekietsuran_${version}_arm64-v8a.apk"
             } else {
-                "shiroikuma-etsuran_${version}-${buildType}_arm64-v8a.apk"
+                "shiroikuma-shosekietsuran_${version}-${buildType}_arm64-v8a.apk"
             }
         }
     }
@@ -369,7 +369,7 @@ tasks.register("buildApk") {
     val propsFile = rootProject.file("gradle.properties")
     val currentBuildNumber = forkBuildNumber
     doLast {
-        val apkName = "shiroikuma-etsuran_${fvName}_arm64-v8a.apk"
+        val apkName = "shiroikuma-shosekietsuran_${fvName}_arm64-v8a.apk"
         val outputDir = releaseApkDir.get().asFile
         val targetDir = File(userHome.get(), "tmp")
         targetDir.mkdirs()
