@@ -137,7 +137,7 @@ fun FeedbackScreen(
                     )
                 },
                 onClick = {
-                    uriHandler.openUri("https://github.com/Aryan-Raj3112/episteme/issues")
+                    uriHandler.openUri("https://github.com/ShiroiKuma0/shiroikuma-shosekietsuran/issues")
                 }
             )
 
