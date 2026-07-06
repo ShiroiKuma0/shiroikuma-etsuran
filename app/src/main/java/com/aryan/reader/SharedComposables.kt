@@ -42,6 +42,7 @@ import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import com.aryan.reader.data.TagEntity
@@ -578,7 +579,9 @@ fun FileInfoDialog(
     onOpenTags: () -> Unit,
     onShareFile: (() -> Unit)? = null,
     onSaveCopy: (() -> Unit)? = null,
-    onSelectForActions: (() -> Unit)? = null
+    onSelectForActions: (() -> Unit)? = null,
+    extraMetadata: com.aryan.reader.whitebear.WhiteBearExtraMetadata? = null,
+    libraryAuthors: List<String> = emptyList()
 ) {
     @Suppress("DEPRECATION") val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
@@ -590,6 +593,9 @@ fun FileInfoDialog(
         mutableStateOf(item.seriesIndex?.formatMetadataNumber().orEmpty())
     }
     var descriptionInput by remember(item.bookId, item.description) { mutableStateOf(item.description.orEmpty()) }
+    var publicationDateInput by remember(item.bookId, extraMetadata?.publicationDate) {
+        mutableStateOf(extraMetadata?.publicationDate.orEmpty())
+    }
     var displayNameInput by remember(item.bookId, item.customName, item.title, item.displayName, usePdfFileNameAsDisplayName) {
         mutableStateOf(item.customName ?: item.cardTitle(usePdfFileNameAsDisplayName))
     }
@@ -719,7 +725,12 @@ fun FileInfoDialog(
                                 onClearCover = {
                                     selectedCoverUri = null
                                     selectedCoverName = null
-                                }
+                                },
+                                authorSuggestions = libraryAuthors,
+                                publicationDateInput = publicationDateInput,
+                                onPublicationDateChange = { publicationDateInput = it },
+                                tags = item.tags,
+                                onEditTags = onOpenTags
                             )
                         } else if (canRenameDisplayName) {
                             BookDisplayNameEditContent(
@@ -737,7 +748,8 @@ fun FileInfoDialog(
                             pathText = pathTextFinal,
                             hasMetadataChanges = hasMetadataChanges,
                             onCopy = { value -> clipboardManager.setText(AnnotatedString(value)) },
-                            onOpenTags = onOpenTags
+                            onOpenTags = onOpenTags,
+                            extraMetadata = extraMetadata
                         )
                     }
                 }
@@ -767,7 +779,8 @@ fun FileInfoDialog(
                                     seriesName = seriesInput.toMetadataValue(),
                                     seriesIndex = seriesIndexInput.toSeriesIndexOrNull(),
                                     description = descriptionInput.toMetadataValue(),
-                                    coverImageUri = selectedCoverUri?.toString()
+                                    coverImageUri = selectedCoverUri?.toString(),
+                                    publicationDate = publicationDateInput.toMetadataValue()
                                 )
                             )
                         } else if (canRenameDisplayName) {
@@ -854,7 +867,8 @@ private fun BookMetadataInfoContent(
     pathText: String,
     hasMetadataChanges: Boolean,
     onCopy: (String) -> Unit,
-    onOpenTags: () -> Unit
+    onOpenTags: () -> Unit,
+    extraMetadata: com.aryan.reader.whitebear.WhiteBearExtraMetadata? = null
 ) {
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -900,6 +914,21 @@ private fun BookMetadataInfoContent(
         }
         item.seriesLabel()?.let {
             InfoRowDetailed(stringResource(R.string.label_series), it, maxLines = 2)
+        }
+        extraMetadata?.publicationDate?.takeIf { it.isNotBlank() }?.let {
+            InfoRowDetailed(stringResource(R.string.label_publication_date), it)
+        }
+        extraMetadata?.publisher?.takeIf { it.isNotBlank() }?.let {
+            InfoRowDetailed(stringResource(R.string.label_publisher), it, maxLines = 2)
+        }
+        extraMetadata?.language?.takeIf { it.isNotBlank() }?.let {
+            InfoRowDetailed(stringResource(R.string.label_language), it)
+        }
+        extraMetadata?.rating?.takeIf { it > 0.0 }?.let {
+            InfoRowDetailed(stringResource(R.string.label_rating), formatBookRating(it))
+        }
+        extraMetadata?.isbn?.takeIf { it.isNotBlank() }?.let {
+            InfoRowDetailed(stringResource(R.string.label_isbn), it, onCopy = { onCopy(it) })
         }
         InfoRowDetailed(stringResource(R.string.format), item.type.name)
         InfoRowDetailed(stringResource(R.string.size), formatFileSize(item.fileSize))
@@ -969,7 +998,12 @@ private fun BookMetadataEditContent(
     selectedCoverUri: Uri?,
     selectedCoverName: String?,
     onChooseCover: () -> Unit,
-    onClearCover: () -> Unit
+    onClearCover: () -> Unit,
+    authorSuggestions: List<String> = emptyList(),
+    publicationDateInput: String = "",
+    onPublicationDateChange: (String) -> Unit = {},
+    tags: List<TagEntity> = emptyList(),
+    onEditTags: () -> Unit = {}
 ) {
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -984,12 +1018,10 @@ private fun BookMetadataEditContent(
                 modifier = Modifier.fillMaxWidth(),
                 maxLines = 3
             )
-            OutlinedTextField(
+            AuthorAutocompleteField(
                 value = authorInput,
                 onValueChange = onAuthorChange,
-                label = { Text(stringResource(R.string.author)) },
-                modifier = Modifier.fillMaxWidth(),
-                maxLines = 2
+                suggestions = authorSuggestions
             )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
@@ -1009,6 +1041,14 @@ private fun BookMetadataEditContent(
                 )
             }
             OutlinedTextField(
+                value = publicationDateInput,
+                onValueChange = onPublicationDateChange,
+                label = { Text(stringResource(R.string.label_publication_date)) },
+                placeholder = { Text("YYYY-MM-DD") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            OutlinedTextField(
                 value = descriptionInput,
                 onValueChange = onDescriptionChange,
                 label = { Text(stringResource(R.string.label_summary)) },
@@ -1018,6 +1058,17 @@ private fun BookMetadataEditContent(
                 minLines = 4,
                 maxLines = 10
             )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(stringResource(R.string.label_library_tags), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = onEditTags) { Text(stringResource(R.string.action_add_edit)) }
+            }
+            if (tags.isNotEmpty()) {
+                BookTagChipsRow(tags = tags, compact = false)
+            }
             MetadataCoverPreview(
                 item = item,
                 currentCoverPath = currentCoverPath,
@@ -1028,6 +1079,64 @@ private fun BookMetadataEditContent(
             )
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AuthorAutocompleteField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    suggestions: List<String>
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val matches = remember(value, suggestions) {
+        val query = value.trim()
+        if (query.isBlank()) {
+            emptyList()
+        } else {
+            suggestions
+                .filter { it.contains(query, ignoreCase = true) && !it.equals(query, ignoreCase = true) }
+                .take(8)
+        }
+    }
+    ExposedDropdownMenuBox(
+        expanded = expanded && matches.isNotEmpty(),
+        onExpandedChange = { expanded = it },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {
+                onValueChange(it)
+                expanded = true
+            },
+            label = { Text(stringResource(R.string.author)) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+            maxLines = 2
+        )
+        ExposedDropdownMenu(
+            expanded = expanded && matches.isNotEmpty(),
+            onDismissRequest = { expanded = false }
+        ) {
+            matches.forEach { suggestion ->
+                DropdownMenuItem(
+                    text = { Text(suggestion) },
+                    onClick = {
+                        onValueChange(suggestion)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** Formats a Calibre 0–10 rating as an "N / 5" star value. */
+private fun formatBookRating(rating: Double): String {
+    val stars = (rating / 2.0).coerceIn(0.0, 5.0)
+    return if (stars % 1.0 == 0.0) "${stars.toInt()} / 5" else "%.1f / 5".format(stars)
 }
 
 @Composable

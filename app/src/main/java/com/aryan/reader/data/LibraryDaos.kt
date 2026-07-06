@@ -59,6 +59,9 @@ interface TagDao {
     @Query("SELECT * FROM tags ORDER BY name ASC")
     fun getAllTags(): Flow<List<TagEntity>>
 
+    @Query("SELECT * FROM tags")
+    suspend fun getAllTagsList(): List<TagEntity>
+
     @Query("SELECT * FROM book_tag_cross_ref")
     fun getAllBookTagCrossRefs(): Flow<List<BookTagCrossRef>>
 
