@@ -27,3 +27,7 @@ output/
 policies/
 episteme-bin/
 episteme-oss-bin/
+
+# shiroikuma fork
+keystore.properties
+.claude/settings.local.json
