@@ -80,6 +80,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -574,7 +575,10 @@ fun FileInfoDialog(
     onSaveMetadata: (BookMetadataEdit) -> Unit,
     onSaveDisplayName: (String?) -> Unit,
     onRestoreMetadata: () -> Unit,
-    onOpenTags: () -> Unit
+    onOpenTags: () -> Unit,
+    onShareFile: (() -> Unit)? = null,
+    onSaveCopy: (() -> Unit)? = null,
+    onSelectForActions: (() -> Unit)? = null
 ) {
     @Suppress("DEPRECATION") val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
@@ -659,6 +663,28 @@ fun FileInfoDialog(
                             isEditing = false
                         } else {
                             onDismiss()
+                        }
+                    },
+                    actions = {
+                        if (!isEditing) {
+                            IconButton(onClick = { isEditing = true }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit")
+                            }
+                            if (onShareFile != null) {
+                                IconButton(onClick = onShareFile) {
+                                    Icon(Icons.Default.Share, contentDescription = "Share file")
+                                }
+                            }
+                            if (onSaveCopy != null) {
+                                IconButton(onClick = onSaveCopy) {
+                                    Icon(painterResource(id = R.drawable.wb_save_alt), contentDescription = "Save a copy")
+                                }
+                            }
+                            if (onSelectForActions != null) {
+                                IconButton(onClick = onSelectForActions) {
+                                    Icon(Icons.Default.Check, contentDescription = "Select")
+                                }
+                            }
                         }
                     }
                 )
@@ -789,7 +815,8 @@ fun FileInfoDialog(
 private fun FileInfoTopBar(
     title: String,
     subtitle: String,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    actions: @Composable RowScope.() -> Unit = {}
 ) {
     Row(
         modifier = Modifier
@@ -814,6 +841,7 @@ private fun FileInfoTopBar(
                 overflow = TextOverflow.Ellipsis
             )
         }
+        actions()
     }
 }
 
