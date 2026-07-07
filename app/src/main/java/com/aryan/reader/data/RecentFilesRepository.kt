@@ -148,6 +148,11 @@ class RecentFilesRepository(private val context: Context) {
         AppDatabase.getDatabase(context).tagDao().insertBookTagCrossRef(BookTagCrossRef(bookId, tagId))
     }
 
+    /** 白い熊 UI: the book's current library-tag names, for writing back into the file. */
+    suspend fun getTagNamesForBook(bookId: String): List<String> = withContext(Dispatchers.IO) {
+        AppDatabase.getDatabase(context).tagDao().getTagNamesForBook(bookId)
+    }
+
     /**
      * 白い熊 UI: assigns the embedded subject/genre entries of a book file as library tags,
      * matching existing tags case-insensitively by name and creating missing ones.

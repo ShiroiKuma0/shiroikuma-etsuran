@@ -396,6 +396,7 @@ fun EpubReaderTopBar(
     modifier: Modifier = Modifier,
     onToggleReflow: (() -> Unit)? = null,
     onDeleteReflow: (() -> Unit)? = null,
+    belowBarContent: (@Composable () -> Unit)? = null,
 ) {
     AnimatedVisibility(
         visible = isVisible,
@@ -403,6 +404,7 @@ fun EpubReaderTopBar(
         exit = slideOutVertically(animationSpec = tween(200)) { -it } + fadeOut(animationSpec = tween(200)),
         modifier = modifier
     ) {
+        Column {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
@@ -923,6 +925,8 @@ fun EpubReaderTopBar(
                     }
                 }
             }
+        }
+        belowBarContent?.invoke()
         }
     }
 }

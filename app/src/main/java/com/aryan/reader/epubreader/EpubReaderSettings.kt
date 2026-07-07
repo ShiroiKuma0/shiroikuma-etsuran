@@ -829,7 +829,8 @@ fun ReaderTextFormatPanel(
                         value = currentLineHeight,
                         onValueChange = onLineHeightChange,
                         valueRange = 0.3f..3.0f,
-                        formatValue = { "%.1fx".format(it) }
+                        stepSize = 0.05f,
+                        formatValue = { "%.2fx".format(it) }
                     )
 
                     FormatSlider(
@@ -1325,7 +1326,7 @@ fun FormatSlider(
             IconButton(
                 onClick = {
                     val newValue = (value - stepSize).coerceAtLeast(valueRange.start)
-                    onValueChange((newValue * 10f).roundToInt() / 10f)
+                    onValueChange((newValue * 100f).roundToInt() / 100f)
                 },
                 modifier = Modifier.size(32.dp) // Slimmer buttons
             ) {
@@ -1343,7 +1344,7 @@ fun FormatSlider(
             IconButton(
                 onClick = {
                     val newValue = (value + stepSize).coerceAtMost(valueRange.endInclusive)
-                    onValueChange((newValue * 10f).roundToInt() / 10f)
+                    onValueChange((newValue * 100f).roundToInt() / 100f)
                 },
                 modifier = Modifier.size(32.dp) // Slimmer buttons
             ) {

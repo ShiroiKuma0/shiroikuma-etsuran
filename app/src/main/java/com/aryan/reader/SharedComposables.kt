@@ -50,6 +50,7 @@ import com.aryan.reader.whitebear.LocalWhiteBearBorderWidth
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -298,7 +299,8 @@ fun ContextualTopAppBar(
     onDeleteClick: () -> Unit,
     compactSelectionActions: Boolean = false,
     overflowDeleteLabelRes: Int = R.string.action_delete,
-    onClearSelectionClick: (() -> Unit)? = null
+    onClearSelectionClick: (() -> Unit)? = null,
+    onParallelReadClick: (() -> Unit)? = null
 ) {
     CustomTopAppBar(
         title = {
@@ -314,6 +316,12 @@ fun ContextualTopAppBar(
             }
         },
         actions = {
+            // 白い熊 UI: pair the selected 2–3 books for parallel reading.
+            if (onParallelReadClick != null) {
+                IconButton(onClick = onParallelReadClick) {
+                    Icon(painterResource(id = R.drawable.wb_parallel), contentDescription = "Parallel read")
+                }
+            }
             if (compactSelectionActions) {
                 CompactSelectionActions(
                     selectedItemCount = selectedItemCount,
@@ -581,7 +589,8 @@ fun FileInfoDialog(
     onSaveCopy: (() -> Unit)? = null,
     onSelectForActions: (() -> Unit)? = null,
     extraMetadata: com.aryan.reader.whitebear.WhiteBearExtraMetadata? = null,
-    libraryAuthors: List<String> = emptyList()
+    libraryAuthors: List<String> = emptyList(),
+    onDeleteBook: (() -> Unit)? = null
 ) {
     @Suppress("DEPRECATION") val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
@@ -600,6 +609,7 @@ fun FileInfoDialog(
         mutableStateOf(item.customName ?: item.cardTitle(usePdfFileNameAsDisplayName))
     }
     var showRestoreConfirmation by remember(item.bookId) { mutableStateOf(false) }
+    var showDeleteConfirmation by remember(item.bookId) { mutableStateOf(false) }
     var selectedCoverUri by remember(item.bookId) { mutableStateOf<Uri?>(null) }
     var selectedCoverName by remember(item.bookId) { mutableStateOf<String?>(null) }
     val coverPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -633,7 +643,10 @@ fun FileInfoDialog(
     }
     val hasOriginalMetadata = item.hasOriginalMetadata()
     val hasMetadataChanges = item.hasMetadataChanges()
-    val canEditEmbeddedMetadata = item.type == FileType.EPUB && !isOpdsStream && item.uriString != null
+    // 白い熊 UI: PDFs carry editable metadata too (info dictionary), not just EPUBs.
+    val canEditEmbeddedMetadata = (item.type == FileType.EPUB || item.type == FileType.PDF) &&
+        !isOpdsStream && item.uriString != null
+    val isPdf = item.type == FileType.PDF
     val canRenameDisplayName = !canEditEmbeddedMetadata
 
     Dialog(
@@ -659,7 +672,11 @@ fun FileInfoDialog(
             ) {
                 FileInfoTopBar(
                     title = if (isEditing) {
-                        if (canEditEmbeddedMetadata) "Edit EPUB metadata" else "Rename in app"
+                        when {
+                            canEditEmbeddedMetadata && isPdf -> "Edit PDF metadata"
+                            canEditEmbeddedMetadata -> "Edit EPUB metadata"
+                            else -> "Rename in app"
+                        }
                     } else {
                         stringResource(R.string.file_information)
                     },
@@ -730,7 +747,9 @@ fun FileInfoDialog(
                                 publicationDateInput = publicationDateInput,
                                 onPublicationDateChange = { publicationDateInput = it },
                                 tags = item.tags,
-                                onEditTags = onOpenTags
+                                onEditTags = onOpenTags,
+                                showPublicationDate = !isPdf,
+                                showCover = !isPdf
                             )
                         } else if (canRenameDisplayName) {
                             BookDisplayNameEditContent(
@@ -758,8 +777,12 @@ fun FileInfoDialog(
 
                 FileInfoBottomBar(
                     isEditing = isEditing,
-                    canRestore = canEditEmbeddedMetadata && hasOriginalMetadata && (hasMetadataChanges || isEditing),
+                    canRestore = item.type == FileType.EPUB && !isOpdsStream && item.uriString != null &&
+                        hasOriginalMetadata && (hasMetadataChanges || isEditing),
                     editLabel = if (canEditEmbeddedMetadata) "Edit metadata" else "Rename",
+                    onDelete = if (!isEditing) {
+                        onDeleteBook?.let { { showDeleteConfirmation = true } }
+                    } else null,
                     onCancel = {
                         if (isEditing) {
                             isEditing = false
@@ -817,6 +840,46 @@ fun FileInfoDialog(
             },
             dismissButton = {
                 TextButton(onClick = { showRestoreConfirmation = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    // 白い熊 UI: guarded delete — Cancel (left, filled) is the preselected action; Delete
+    // (right) is the plain destructive one. The dialog carries the yellow frame.
+    if (showDeleteConfirmation && onDeleteBook != null) {
+        val wbFrame = remember { com.aryan.reader.whitebear.WhiteBearUiState.get(context) }
+        AlertDialog(
+            modifier = Modifier.border(
+                wbFrame.borderWidth.coerceAtLeast(1f).dp,
+                MaterialTheme.colorScheme.outline,
+                MaterialTheme.shapes.extraLarge
+            ),
+            onDismissRequest = { showDeleteConfirmation = false },
+            icon = { Icon(Icons.Default.Delete, contentDescription = null) },
+            title = { Text("Delete this book?") },
+            text = {
+                Text(
+                    "“${item.cardTitle(usePdfFileNameAsDisplayName)}” will be permanently deleted — " +
+                        "the book file and all its reading data. This cannot be undone."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirmation = false
+                        onDeleteBook()
+                    }
+                ) {
+                    Text(
+                        stringResource(R.string.action_delete),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            dismissButton = {
+                Button(onClick = { showDeleteConfirmation = false }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }
@@ -1003,7 +1066,9 @@ private fun BookMetadataEditContent(
     publicationDateInput: String = "",
     onPublicationDateChange: (String) -> Unit = {},
     tags: List<TagEntity> = emptyList(),
-    onEditTags: () -> Unit = {}
+    onEditTags: () -> Unit = {},
+    showPublicationDate: Boolean = true,
+    showCover: Boolean = true
 ) {
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -1040,14 +1105,16 @@ private fun BookMetadataEditContent(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                 )
             }
-            OutlinedTextField(
-                value = publicationDateInput,
-                onValueChange = onPublicationDateChange,
-                label = { Text(stringResource(R.string.label_publication_date)) },
-                placeholder = { Text("YYYY-MM-DD") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
+            if (showPublicationDate) {
+                OutlinedTextField(
+                    value = publicationDateInput,
+                    onValueChange = onPublicationDateChange,
+                    label = { Text(stringResource(R.string.label_publication_date)) },
+                    placeholder = { Text("YYYY-MM-DD") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            }
             OutlinedTextField(
                 value = descriptionInput,
                 onValueChange = onDescriptionChange,
@@ -1069,14 +1136,16 @@ private fun BookMetadataEditContent(
             if (tags.isNotEmpty()) {
                 BookTagChipsRow(tags = tags, compact = false)
             }
-            MetadataCoverPreview(
-                item = item,
-                currentCoverPath = currentCoverPath,
-                selectedCoverUri = selectedCoverUri,
-                selectedCoverName = selectedCoverName,
-                onChooseCover = onChooseCover,
-                onClearCover = onClearCover
-            )
+            if (showCover) {
+                MetadataCoverPreview(
+                    item = item,
+                    currentCoverPath = currentCoverPath,
+                    selectedCoverUri = selectedCoverUri,
+                    selectedCoverName = selectedCoverName,
+                    onChooseCover = onChooseCover,
+                    onClearCover = onClearCover
+                )
+            }
         }
     }
 }
@@ -1260,41 +1329,60 @@ private fun FileInfoBottomBar(
     onCancel: () -> Unit,
     onRestore: () -> Unit,
     onSave: () -> Unit,
-    onEdit: () -> Unit
+    onEdit: () -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (canRestore) {
+        // 白い熊 UI: Delete sits alone on the far left, clearly apart from the action group.
+        if (onDelete != null) {
             OutlinedButton(
-                onClick = onRestore,
-                modifier = Modifier.padding(end = 8.dp)
+                onClick = onDelete,
+                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
             ) {
-                Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.action_restore))
+                Text(stringResource(R.string.action_delete))
             }
         }
-        TextButton(onClick = onCancel) {
-            Text(if (isEditing) stringResource(R.string.action_cancel) else stringResource(R.string.action_close))
-        }
-        Spacer(modifier = Modifier.width(8.dp))
-        if (isEditing) {
-            Button(onClick = onSave) {
-                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.action_save))
+        Spacer(modifier = Modifier.weight(1f))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (canRestore) {
+                OutlinedButton(
+                    onClick = onRestore,
+                    modifier = Modifier.padding(end = 8.dp)
+                ) {
+                    Icon(Icons.Default.Restore, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.action_restore))
+                }
             }
-        } else {
-            Button(onClick = onEdit) {
-                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(editLabel)
+            TextButton(onClick = onCancel) {
+                Text(if (isEditing) stringResource(R.string.action_cancel) else stringResource(R.string.action_close))
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            if (isEditing) {
+                Button(onClick = onSave) {
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.action_save))
+                }
+            } else {
+                Button(onClick = onEdit) {
+                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(editLabel)
+                }
             }
         }
     }
@@ -1466,7 +1554,7 @@ private fun HtmlSummaryText(
     )
 }
 
-private fun RecentFileItem.resolveDisplayPath(context: Context, isOpdsStream: Boolean): String {
+internal fun RecentFileItem.resolveDisplayPath(context: Context, isOpdsStream: Boolean): String {
     return if (isOpdsStream) {
         "Source: OPDS Stream"
     } else if (sourceFolderUri != null && uriString != null) {
@@ -1577,8 +1665,16 @@ fun CustomTopBanner(bannerMessage: BannerMessage?) {
                 .statusBarsPadding(),
             contentAlignment = Alignment.TopCenter
         ) {
+            // 白い熊 UI: banners always carry the theme border (yellow frame).
+            val wbBanner = remember { com.aryan.reader.whitebear.WhiteBearUiState.get(context) }
             Surface(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .border(
+                        wbBanner.borderWidth.coerceAtLeast(1f).dp,
+                        MaterialTheme.colorScheme.outline,
+                        MaterialTheme.shapes.medium
+                    ),
                 color = if (bannerMessage?.isError == true) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
                 shape = MaterialTheme.shapes.medium,
                 shadowElevation = 8.dp
@@ -1902,15 +1998,16 @@ fun FileTypeBadge(
     overlay: Boolean = false,
     compact: Boolean = false
 ) {
-    val containerColor = if (overlay) Color.Black.copy(alpha = 0.6f) else MaterialTheme.colorScheme.secondaryContainer
-    val contentColor = if (overlay) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
+    // 白い熊 UI: overlay pills follow the theme — black pill, yellow text and frame.
+    val containerColor = if (overlay) MaterialTheme.colorScheme.surface.copy(alpha = 0.85f) else MaterialTheme.colorScheme.secondaryContainer
+    val contentColor = if (overlay) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer
 
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(50),
         color = containerColor,
         contentColor = contentColor,
-        border = if (overlay) BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)) else null
+        border = if (overlay) BorderStroke(1.dp, MaterialTheme.colorScheme.outline) else null
     ) {
         Text(
             text = if (type == FileType.UNKNOWN) "FILE" else type.name.uppercase(),

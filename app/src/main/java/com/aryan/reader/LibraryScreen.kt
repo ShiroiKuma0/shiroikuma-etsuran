@@ -80,11 +80,16 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -277,6 +282,8 @@ fun LibraryScreen(
 
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var showDeleteShelvesDialog by remember { mutableStateOf(false) }
+    var showParallelOrderDialog by remember { mutableStateOf(false) }
+    var wbDeleteCandidate by remember { mutableStateOf<RecentFileItem?>(null) }
     var showInfoDialog by remember { mutableStateOf(false) }
     var itemForInfoDialog by remember { mutableStateOf<RecentFileItem?>(null) }
     var pendingSaveOriginalItem by remember { mutableStateOf<RecentFileItem?>(null) }
@@ -354,6 +361,26 @@ fun LibraryScreen(
         viewModel.setSearchActive(false)
     }
 
+    // 白い熊 UI: per-book cover-menu actions.
+    val wbBookMenuActions = remember(context) {
+        WhiteBearBookMenuActions(
+            onInfo = { item ->
+                itemForInfoDialog = item
+                showInfoDialog = true
+            },
+            onTags = { item -> viewModel.openTagSelection(setOf(item.bookId)) },
+            onShare = { item -> shareOriginalItem(item) },
+            onSaveCopy = { item -> saveOriginalItem(item) },
+            onAddParallel = { item ->
+                val parallel = com.aryan.reader.whitebear.WhiteBearParallelState.get(context)
+                val ids = (parallel.bookIds + item.bookId).distinct().take(3)
+                parallel.updateSet(ids)
+                viewModel.showBanner("Parallel set (${ids.size}/3): flip with a two-finger swipe.")
+            },
+            onDelete = { item -> wbDeleteCandidate = item }
+        )
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         LibraryScreenContent(
             tabTitles = tabTitles,
@@ -380,13 +407,19 @@ fun LibraryScreen(
             onAddToShelfClick = { viewModel.openAddSelectedToShelf(selectedItems.map { it.bookId }.toSet()) },
             onPinClick = { viewModel.togglePinForContextualItems(isHome = false) },
             onClearSelection = { viewModel.clearContextualAction() },
-            onItemClick = viewModel::onRecentFileClicked,
-            // 白い熊 UI: long-press opens the book-details dialog (multi-select is still
-            // reachable from the dialog's select action).
-            onItemLongClick = { item ->
-                itemForInfoDialog = item
-                showInfoDialog = true
+            onItemClick = { item ->
+                // 白い熊 UI: when "Add book for parallel reading" armed picking, the tapped
+                // book joins the set and opens straight away.
+                val parallel = com.aryan.reader.whitebear.WhiteBearParallelState.get(context)
+                if (parallel.pickingArmed) {
+                    parallel.disarmPicking()
+                    parallel.addBook(item.bookId)
+                    viewModel.showBanner("Parallel set (${parallel.bookIds.size}/3) — flip with a two-finger swipe.")
+                }
+                viewModel.onRecentFileClicked(item)
             },
+            // Long-press selects (stock behavior); per-book actions live in the cover menu.
+            onItemLongClick = viewModel::onRecentItemLongPress,
             onInfoClick = {
                 if (selectedItems.size == 1) {
                     itemForInfoDialog = selectedItems.first()
@@ -437,6 +470,8 @@ fun LibraryScreen(
             onDeleteCatalogStreams = viewModel::deleteStreamedBooksForCatalog,
             onSettingsClick = { navController.navigate(AppDestinations.SETTINGS_SCREEN_ROUTE) },
             onSettingsLongClick = { navController.navigate(AppDestinations.WHITE_BEAR_UI_SCREEN_ROUTE) },
+            onParallelReadClick = { showParallelOrderDialog = true },
+            bookMenuActions = wbBookMenuActions,
             usePdfFileNameAsDisplayName = uiState.usePdfFileNameAsDisplayName
         )
 
@@ -473,6 +508,60 @@ fun LibraryScreen(
             CreateShelfDialog(
                 onConfirm = viewModel::createShelf,
                 onDismiss = viewModel::dismissCreateShelfDialog
+            )
+        }
+
+        wbDeleteCandidate?.let { candidate ->
+            val wbFrame = remember { com.aryan.reader.whitebear.WhiteBearUiState.get(context) }
+            AlertDialog(
+                modifier = Modifier.border(
+                    wbFrame.borderWidth.coerceAtLeast(1f).dp,
+                    MaterialTheme.colorScheme.outline,
+                    MaterialTheme.shapes.extraLarge
+                ),
+                onDismissRequest = { wbDeleteCandidate = null },
+                icon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                title = { Text("Delete this book?") },
+                text = {
+                    Text(
+                        "“${candidate.cardTitle(uiState.usePdfFileNameAsDisplayName)}” will be permanently deleted — " +
+                            "the book file and all its reading data. This cannot be undone."
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            wbDeleteCandidate = null
+                            viewModel.deleteBookPermanently(candidate.bookId)
+                        }
+                    ) {
+                        Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    Button(onClick = { wbDeleteCandidate = null }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                }
+            )
+        }
+
+        if (showParallelOrderDialog) {
+            WhiteBearParallelOrderDialog(
+                items = selectedItems.toList(),
+                onStart = { orderedIds ->
+                    com.aryan.reader.whitebear.WhiteBearParallelState.get(context).updateSet(orderedIds)
+                    showParallelOrderDialog = false
+                    val first = selectedItems.firstOrNull { it.bookId == orderedIds.firstOrNull() }
+                    viewModel.clearContextualAction()
+                    first?.let { viewModel.onRecentFileClicked(it) }
+                },
+                onClearSet = {
+                    com.aryan.reader.whitebear.WhiteBearParallelState.get(context).clear()
+                    showParallelOrderDialog = false
+                    viewModel.showBanner("Parallel reading set cleared.")
+                },
+                onDismiss = { showParallelOrderDialog = false }
             )
         }
 
@@ -531,6 +620,13 @@ fun LibraryScreen(
                     showInfoDialog = false
                     itemForInfoDialog = null
                     viewModel.onRecentItemLongPress(item)
+                }
+            },
+            onDeleteBook = itemForInfoDialog?.let { item ->
+                {
+                    showInfoDialog = false
+                    itemForInfoDialog = null
+                    viewModel.deleteBookPermanently(item.bookId)
                 }
             }
         )
@@ -756,6 +852,8 @@ fun LibraryScreenContent(
     onDeleteCatalogStreams: (String) -> Unit,
     onSettingsClick: () -> Unit,
     onSettingsLongClick: () -> Unit = {},
+    onParallelReadClick: (() -> Unit)? = null,
+    bookMenuActions: WhiteBearBookMenuActions? = null,
     usePdfFileNameAsDisplayName: Boolean,
 ) {
     val isBookContextualModeActive = selectedItems.isNotEmpty()
@@ -814,7 +912,8 @@ fun LibraryScreenContent(
                         onDeleteClick = onDeleteClick,
                         onSelectAllClick = onSelectAllClick,
                         compactSelectionActions = true,
-                        onClearSelectionClick = onClearSelection
+                        onClearSelectionClick = onClearSelection,
+                        onParallelReadClick = if (selectedItems.size in 2..3) onParallelReadClick else null
                     )
                 } else if (isShelfContextualModeActive && pagerState.currentPage == 1) {
                     ContextualTopAppBar(
@@ -1151,7 +1250,8 @@ fun LibraryScreenContent(
                                     authorFontSp = wbLibraryState.authorFontSize,
                                     onItemClick = { onItemClick(item) },
                                     onItemLongClick = { onItemLongClick(item) },
-                                    usePdfFileNameAsDisplayName = usePdfFileNameAsDisplayName
+                                    usePdfFileNameAsDisplayName = usePdfFileNameAsDisplayName,
+                                    menuActions = bookMenuActions
                                 )
                             }
                         }
@@ -1169,7 +1269,8 @@ fun LibraryScreenContent(
                                     onItemClick = { onItemClick(item) },
                                     onItemLongClick = { onItemLongClick(item) },
                                     isDownloading = item.bookId in downloadingBookIds,
-                                    usePdfFileNameAsDisplayName = usePdfFileNameAsDisplayName
+                                    usePdfFileNameAsDisplayName = usePdfFileNameAsDisplayName,
+                                    menuActions = bookMenuActions
                                 )
                             }
                         }
@@ -1952,6 +2053,180 @@ private fun ShelfListItem(
     }
 }
 
+/** 白い熊 UI: per-book actions offered by the cover hamburger menu. */
+data class WhiteBearBookMenuActions(
+    val onInfo: (RecentFileItem) -> Unit,
+    val onTags: (RecentFileItem) -> Unit,
+    val onShare: (RecentFileItem) -> Unit,
+    val onSaveCopy: (RecentFileItem) -> Unit,
+    val onAddParallel: (RecentFileItem) -> Unit,
+    val onDelete: (RecentFileItem) -> Unit
+)
+
+/** Yellow hamburger in the cover's bottom-left corner with the per-book action menu. */
+@Composable
+private fun WhiteBearBookCoverMenu(
+    item: RecentFileItem,
+    actions: WhiteBearBookMenuActions,
+    modifier: Modifier = Modifier
+) {
+    var open by remember { mutableStateOf(false) }
+    val wbContext = LocalContext.current
+    val wbFrame = remember { com.aryan.reader.whitebear.WhiteBearUiState.get(wbContext) }
+    Box(modifier = modifier) {
+        // Bare three yellow dots — no pill behind them.
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .clickable { open = true },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.MoreVert,
+                contentDescription = "Book actions",
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            modifier = Modifier.border(
+                wbFrame.borderWidth.coerceAtLeast(1f).dp,
+                MaterialTheme.colorScheme.outline,
+                MaterialTheme.shapes.extraSmall
+            )
+        ) {
+            DropdownMenuItem(
+                text = { Text("Add to parallel reading") },
+                leadingIcon = { Icon(painterResource(id = R.drawable.wb_parallel), contentDescription = null) },
+                onClick = { open = false; actions.onAddParallel(item) }
+            )
+            DropdownMenuItem(
+                text = { Text("File info") },
+                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                onClick = { open = false; actions.onInfo(item) }
+            )
+            DropdownMenuItem(
+                text = { Text("Tags") },
+                leadingIcon = { Icon(painterResource(id = R.drawable.tag), contentDescription = null) },
+                onClick = { open = false; actions.onTags(item) }
+            )
+            if (item.canExportOriginalFile()) {
+                DropdownMenuItem(
+                    text = { Text("Share file") },
+                    leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                    onClick = { open = false; actions.onShare(item) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Save a copy") },
+                    leadingIcon = { Icon(painterResource(id = R.drawable.wb_save_alt), contentDescription = null) },
+                    onClick = { open = false; actions.onSaveCopy(item) }
+                )
+            }
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                },
+                onClick = { open = false; actions.onDelete(item) }
+            )
+        }
+    }
+}
+
+/**
+ * 白い熊 UI: order the selected 2–3 books left → right for parallel reading, then start.
+ * While the set is active, a two-finger horizontal swipe in the reader flips books.
+ */
+@Composable
+private fun WhiteBearParallelOrderDialog(
+    items: List<RecentFileItem>,
+    onStart: (List<String>) -> Unit,
+    onClearSet: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var order by remember { mutableStateOf(items) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Parallel reading") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "Order the books left → right. While reading, swipe horizontally with two fingers to flip between them.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                order.forEachIndexed { index, item ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "${index + 1}.",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.width(28.dp)
+                        )
+                        Text(
+                            item.cardTitle(false),
+                            modifier = Modifier.weight(1f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        IconButton(
+                            onClick = {
+                                if (index > 0) {
+                                    order = order.toMutableList().also {
+                                        val tmp = it[index]
+                                        it[index] = it[index - 1]
+                                        it[index - 1] = tmp
+                                    }
+                                }
+                            },
+                            enabled = index > 0,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move left")
+                        }
+                        IconButton(
+                            onClick = {
+                                if (index < order.lastIndex) {
+                                    order = order.toMutableList().also {
+                                        val tmp = it[index]
+                                        it[index] = it[index + 1]
+                                        it[index + 1] = tmp
+                                    }
+                                }
+                            },
+                            enabled = index < order.lastIndex,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move right")
+                        }
+                    }
+                }
+                TextButton(onClick = onClearSet) {
+                    Text("Clear current parallel set")
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onStart(order.map { it.bookId }) }) {
+                Text("Start reading")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        }
+    )
+}
+
 /** Compact slider row inside the layout dropdown menu; the grid reflows live. */
 @Composable
 private fun WhiteBearLayoutMenuSlider(
@@ -2000,8 +2275,22 @@ private fun WhiteBearLibraryFilterRow(
 ) {
     var authorMenuOpen by remember { mutableStateOf(false) }
     var tagMenuOpen by remember { mutableStateOf(false) }
+    var authorQuery by remember { mutableStateOf("") }
+    var authorSortByLastName by rememberSaveable { mutableStateOf(false) }
     val filtersActive = selectedAuthor != null || selectedTagId != null
     val sortedTags = remember(allTags) { allTags.sortedBy { it.name.lowercase() } }
+    val visibleAuthors = remember(authors, authorQuery, authorSortByLastName) {
+        val filtered = if (authorQuery.isBlank()) {
+            authors
+        } else {
+            authors.filter { it.contains(authorQuery.trim(), ignoreCase = true) }
+        }
+        if (authorSortByLastName) {
+            filtered.sortedBy { it.trim().substringAfterLast(' ').lowercase() }
+        } else {
+            filtered.sortedBy { it.lowercase() }
+        }
+    }
 
     Row(
         modifier = Modifier
@@ -2028,7 +2317,33 @@ private fun WhiteBearLibraryFilterRow(
                 Icon(Icons.Default.ArrowDropDown, contentDescription = null)
             }
             DropdownMenu(expanded = authorMenuOpen, onDismissRequest = { authorMenuOpen = false }) {
-                authors.forEach { author ->
+                // 白い熊 UI: search-as-you-type plus first/last-name sorting.
+                androidx.compose.material3.OutlinedTextField(
+                    value = authorQuery,
+                    onValueChange = { authorQuery = it },
+                    placeholder = { Text("Search authors…") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .width(300.dp)
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    androidx.compose.material3.FilterChip(
+                        selected = !authorSortByLastName,
+                        onClick = { authorSortByLastName = false },
+                        label = { Text("First name") }
+                    )
+                    androidx.compose.material3.FilterChip(
+                        selected = authorSortByLastName,
+                        onClick = { authorSortByLastName = true },
+                        label = { Text("Last name") }
+                    )
+                }
+                HorizontalDivider()
+                visibleAuthors.forEach { author ->
                     DropdownMenuItem(
                         text = { Text(author, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         trailingIcon = if (author == selectedAuthor) {
@@ -2037,6 +2352,7 @@ private fun WhiteBearLibraryFilterRow(
                         onClick = {
                             onAuthorSelected(if (author == selectedAuthor) null else author)
                             authorMenuOpen = false
+                            authorQuery = ""
                         }
                     )
                 }
@@ -2081,7 +2397,8 @@ private fun WhiteBearLibraryGridItem(
     authorFontSp: Float,
     onItemClick: () -> Unit,
     onItemLongClick: () -> Unit,
-    usePdfFileNameAsDisplayName: Boolean
+    usePdfFileNameAsDisplayName: Boolean,
+    menuActions: WhiteBearBookMenuActions? = null
 ) {
     Column(
         modifier = Modifier
@@ -2107,6 +2424,25 @@ private fun WhiteBearLibraryGridItem(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
+            if (item.type == FileType.PDF) {
+                FileTypeBadge(
+                    type = item.type,
+                    overlay = true,
+                    compact = true,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(4.dp)
+                )
+            }
+            if (menuActions != null) {
+                WhiteBearBookCoverMenu(
+                    item = item,
+                    actions = menuActions,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(4.dp)
+                )
+            }
         }
         Text(
             item.cardTitle(usePdfFileNameAsDisplayName),
@@ -2138,6 +2474,7 @@ private fun LibraryListItem(
     onItemLongClick: () -> Unit,
     isDownloading: Boolean,
     usePdfFileNameAsDisplayName: Boolean = false,
+    menuActions: WhiteBearBookMenuActions? = null,
 ) {
     androidx.compose.material3.ElevatedCard(
         shape = MaterialTheme.shapes.large,
@@ -2189,6 +2526,15 @@ private fun LibraryListItem(
                     ) {
                         Icon(Icons.Default.Check, contentDescription = stringResource(R.string.content_desc_selected), modifier = Modifier.size(36.dp).background(MaterialTheme.colorScheme.primary, CircleShape).padding(6.dp), tint = MaterialTheme.colorScheme.onPrimary)
                     }
+                }
+                if (menuActions != null && !isSelected) {
+                    WhiteBearBookCoverMenu(
+                        item = item,
+                        actions = menuActions,
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(3.dp)
+                    )
                 }
             }
 
