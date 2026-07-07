@@ -1153,10 +1153,29 @@ fun EpubReaderHost(
     var loadedChunkCount by remember { mutableIntStateOf(1) }
     var loadUpToChunkIndex by remember(currentChapterIndex) { mutableIntStateOf(0) }
 
+    // 白い熊 UI: per-book writing direction; tategaki chapters flow horizontally, so the
+    // scroll-driven chunk loading is bypassed by loading every chunk up front.
+    var wbWritingMode by remember(readerCacheBookId) {
+        mutableStateOf(com.aryan.reader.whitebear.WhiteBearWritingMode.load(context, readerCacheBookId))
+    }
+    var wbChapterIsVertical by remember { mutableStateOf(false) }
+    var wbRubySpace by remember {
+        mutableStateOf(com.aryan.reader.whitebear.WhiteBearWritingMode.loadRubySpace(context))
+    }
+
     var chapterChunks by remember(currentChapterIndex) { mutableStateOf<List<String>>(emptyList()) }
     var chapterChunkElementStartIndices by remember(currentChapterIndex) { mutableStateOf<List<Int>>(emptyList()) }
     var chapterChunkElementCounts by remember(currentChapterIndex) { mutableStateOf<List<Int>>(emptyList()) }
     var chapterHead by remember(currentChapterIndex) { mutableStateOf("") }
+
+    LaunchedEffect(wbChapterIsVertical, chapterChunks.size) {
+        // Tategaki: the document scrolls on X, so Y-scroll chunk loading never fires —
+        // load the whole chapter instead.
+        if (wbChapterIsVertical && chapterChunks.isNotEmpty()) {
+            loadUpToChunkIndex = chapterChunks.lastIndex
+            loadedChunkCount = chapterChunks.size
+        }
+    }
     val epubFontFaceCss = remember(epubBook.css, epubBook.extractionBasePath) {
         val fontFaces = epubBook.css.flatMap { (path, content) ->
             CssParser.parse(
@@ -4466,10 +4485,13 @@ fun EpubReaderHost(
                     24.dp
                 }
             }
+            // 白い熊 UI: bars OVERLAY the text in every mode — stable padding means no
+            // reflow when the chrome toggles (the WebView mode used the live scaffold
+            // padding and re-laid the page out on every centre tap).
             val effectiveTopPadding = when {
                 currentRenderMode == RenderMode.PAGINATED -> stableChromeTopPadding
                 isNativeVerticalMode -> stableChromeTopPadding
-                else -> currentTopPadding
+                else -> stableChromeTopPadding
             }
 
             val epubJumpBackLabel = epubJumpHistory.backLocator?.epubJumpLabel()
@@ -4576,20 +4598,25 @@ fun EpubReaderHost(
                         return
                     }
                     webView.evaluateJavascript("window.whiteBearTurnPage($dir, $fraction);") { result ->
+                        // "end"/"start" are LOGICAL (the JS handles tategaki inversion), so
+                        // chapter flips follow the returned value, not the tap side.
                         when (result?.trim('"')) {
                             "moved" -> whiteBearPlayPageSound()
-                            "end" -> if (dir > 0 && currentChapterIndex < chapters.lastIndex) {
+                            "end" -> if (currentChapterIndex < chapters.lastIndex) {
                                 whiteBearWebViewChapter(1, ChapterScrollPosition.START)
                                 whiteBearPlayPageSound()
                             }
-                            "start" -> if (dir < 0 && currentChapterIndex > 0) {
+                            "start" -> if (currentChapterIndex > 0) {
                                 whiteBearWebViewChapter(-1, ChapterScrollPosition.END)
                                 whiteBearPlayPageSound()
                             }
                         }
                     }
                 } else {
-                    navigateReaderPageBy(dir)
+                    // Forced Vertical keeps the Japanese tap convention (left = forward)
+                    // in the native/paginated renderers; Auto/Horizontal stay Western.
+                    val wbEffDir = if (wbWritingMode == com.aryan.reader.whitebear.WhiteBearWritingMode.VERTICAL) -dir else dir
+                    navigateReaderPageBy(wbEffDir)
                     whiteBearPlayPageSound()
                 }
             }
@@ -4638,11 +4665,13 @@ fun EpubReaderHost(
                     whiteBearTapTurn, whiteBearRightSwipeFont, whiteBearLeftSwipeBrightness,
                     whiteBearParallelOn, whiteBearScreenWidthPx
                 ) {
-                    val third = whiteBearScreenWidthPx / 3f
                     val stepPx = 48.dp.toPx()
                     val flipThresholdPx = 56.dp.toPx()
                     val slop = viewConfiguration.touchSlop
                     awaitEachGesture {
+                        // Zones from the pane's own width, so they stay correct in split mode.
+                        val paneWidth = size.width.toFloat()
+                        val third = paneWidth / 3f
                         val down = awaitFirstDown(
                             requireUnconsumed = false,
                             pass = androidx.compose.ui.input.pointer.PointerEventPass.Initial
@@ -4650,7 +4679,7 @@ fun EpubReaderHost(
                         val zone = when {
                             third <= 0f -> 0
                             down.position.x < third -> -1
-                            down.position.x > whiteBearScreenWidthPx - third -> 1
+                            down.position.x > paneWidth - third -> 1
                             else -> 0
                         }
                         if (zone == 0 && !whiteBearParallelOn) return@awaitEachGesture
@@ -4750,12 +4779,46 @@ fun EpubReaderHost(
             } else {
                 Modifier
             }
+            // 白い熊 UI: same-screen split — the primary reader shares the screen with the
+            // parallel companion pane (VERTICAL = stacked, HORIZONTAL = side by side).
+            val wbSplitCurrentId = uiState.selectedBookId?.removeSuffix("_reflow") ?: bookId
+            val wbSplitCompanionId = whiteBearParallel.neighborOf(wbSplitCurrentId, 1)
+            val wbEffectiveSplitMode = if (wbSplitCompanionId != null) {
+                whiteBearParallel.splitMode
+            } else {
+                com.aryan.reader.whitebear.WhiteBearSplitMode.NONE
+            }
+            val wbCompanionPane: @androidx.compose.runtime.Composable (Modifier) -> Unit = { paneModifier ->
+                    WhiteBearCompanionPane(
+                        bookId = wbSplitCompanionId.orEmpty(),
+                        viewModel = viewModel,
+                        onToggleChrome = {
+                            if (showBars || showFormatAdjustmentBars) {
+                                showBars = false
+                                showFormatAdjustmentBars = false
+                            } else {
+                                showBars = true
+                            }
+                        },
+                        onBrightnessStep = { whiteBearStepBrightness(it) },
+                        onFlip = { whiteBearParallelFlip(it) },
+                        onPageTurnSound = { whiteBearPlayPageSound() },
+                        modifier = paneModifier,
+                        fontSizeMultiplier = currentFontSizeEm,
+                        lineHeightMultiplier = currentLineHeight,
+                        paragraphGapMultiplier = currentParagraphGap,
+                        imageSizeMultiplier = currentImageSize,
+                        horizontalMarginMultiplier = currentHorizontalMargin,
+                        verticalMarginMultiplier = currentVerticalMargin,
+                        fontFamily = activeFontFamily,
+                        textAlign = currentTextAlign
+                    )
+                }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(effectiveBg)
                     .then(activeTextureModifier)
-                    .then(whiteBearGestureModifier)
                     .padding(top = effectiveTopPadding)
                     .focusRequester(containerFocusRequester)
                     .focusable()
@@ -4845,6 +4908,11 @@ fun EpubReaderHost(
                         onLastPage = { navigateReaderBoundary(first = false) }
                     )
             ) {
+                com.aryan.reader.whitebear.WhiteBearSplitContainer(
+                    mode = wbEffectiveSplitMode,
+                    companion = wbCompanionPane
+                ) { wbPaneModifier ->
+                Box(modifier = wbPaneModifier.then(whiteBearGestureModifier)) {
                 when (currentRenderMode) {
                     RenderMode.VERTICAL_SCROLL -> {
                         val pageInfoReserve = if (shouldReserveEpubPageInfoBarSpace(pageInfoMode, showBars, isNativeVerticalMode)) pageInfoBarHeight else 0.dp
@@ -5187,6 +5255,9 @@ fun EpubReaderHost(
                                         @Suppress("ControlFlowWithEmptyBody")
                                         ChapterWebView(
                                             key = chapterKeyForWebView,
+                                            whiteBearWritingMode = wbWritingMode,
+                                            whiteBearRubySpace = wbRubySpace,
+                                            onWhiteBearVerticalDetected = { wbChapterIsVertical = it },
                                             chapterTitle = chapterToRender.title,
                                             isDarkTheme = isDarkTheme,
                                             effectiveBg = effectiveBg,
@@ -6286,6 +6357,8 @@ fun EpubReaderHost(
                         }
                     }
                 }
+                }
+                }
 
                 val isBookmarked: Boolean
                 val onBookmarkClick: () -> Unit
@@ -6912,6 +6985,17 @@ fun EpubReaderHost(
                     bottomTools = bottomTools,
                     onCustomizeTools = { showCustomizeToolsSheet = true },
                     onNavigateBack = { triggerSaveAndExit() },
+                    whiteBearTategakiActive = wbWritingMode == com.aryan.reader.whitebear.WhiteBearWritingMode.VERTICAL ||
+                        (wbWritingMode == com.aryan.reader.whitebear.WhiteBearWritingMode.AUTO && wbChapterIsVertical),
+                    onWhiteBearWritingChange = { newMode ->
+                        wbWritingMode = newMode
+                        com.aryan.reader.whitebear.WhiteBearWritingMode.save(context, readerCacheBookId, newMode)
+                    },
+                    whiteBearRubySpace = wbRubySpace,
+                    onWhiteBearRubySpaceChange = { enabled ->
+                        wbRubySpace = enabled
+                        com.aryan.reader.whitebear.WhiteBearWritingMode.saveRubySpace(context, enabled)
+                    },
                     isKeepScreenOn = isKeepScreenOn,
                     onToggleKeepScreenOn = { enabled ->
                         isKeepScreenOn = enabled
@@ -7120,7 +7204,10 @@ fun EpubReaderHost(
                         // it offers "Add book for parallel reading").
                         val wbCurrentId = uiState.selectedBookId?.removeSuffix("_reflow") ?: bookId
                         val wbSetIds = whiteBearParallel.bookIds
-                        val wbTabIds = if (wbCurrentId in wbSetIds) wbSetIds else listOf(wbCurrentId) + wbSetIds.take(2)
+                        // A book outside the set stays free of it: it shows alone with only
+                        // the "add" tab; the existing set is untouched until a new pairing
+                        // is explicitly started from this book.
+                        val wbTabIds = if (wbCurrentId in wbSetIds) wbSetIds else listOf(wbCurrentId)
                         val wbTabs = wbTabIds.map { id ->
                             val title = uiState.rawLibraryFiles.firstOrNull { it.bookId == id }
                                 ?.cardTitle(uiState.usePdfFileNameAsDisplayName)
@@ -7138,13 +7225,16 @@ fun EpubReaderHost(
                             onInfo = { wbTabInfoBookId = it },
                             onAddBook = {
                                 if (wbCurrentId !in whiteBearParallel.bookIds) {
-                                    whiteBearParallel.updateSet(listOf(wbCurrentId) + whiteBearParallel.bookIds)
+                                    // Starting parallel from a free book begins a NEW set.
+                                    whiteBearParallel.updateSet(listOf(wbCurrentId))
                                 }
                                 whiteBearParallel.armPicking()
                                 viewModel.setMainScreenPage(1)
                                 viewModel.showBanner("Pick a book in the library to read in parallel.")
                                 triggerSaveAndExit()
-                            }
+                            },
+                            splitMode = whiteBearParallel.splitMode,
+                            onSplitModeChange = { whiteBearParallel.updateSplitMode(it) }
                         )
                     }
                 )
