@@ -67,6 +67,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CollectionsBookmark
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.FormatListNumbered
 import androidx.compose.material.icons.filled.Info
@@ -454,6 +455,9 @@ fun HomeScreen(
                                 },
                                 onSettingsLongClick = {
                                     navController.navigate(AppDestinations.WHITE_BEAR_UI_SCREEN_ROUTE)
+                                },
+                                onAnnotationLibraryClick = {
+                                    navController.navigate(AppDestinations.ANNOTATION_LIBRARY_SCREEN_ROUTE)
                                 },
                                 onTestPanelDetectionClick = { viewModel.testPanelDetection(context) },
                                 onTestSpeechBubbleDetectionClick = { viewModel.testSpeechBubbleDetection(context) },
@@ -1122,6 +1126,7 @@ fun DefaultTopAppBar(
     onAppThemeClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onSettingsLongClick: () -> Unit = {},
+    onAnnotationLibraryClick: () -> Unit = {},
     onTestPanelDetectionClick: () -> Unit,
     onTestSpeechBubbleDetectionClick: () -> Unit,
     onLanguageClick: () -> Unit,
@@ -1146,6 +1151,10 @@ fun DefaultTopAppBar(
             }
         }
     }, actions = {
+        // Fork: central annotation library across all books.
+        IconButton(onClick = onAnnotationLibraryClick) {
+            Icon(Icons.Default.CollectionsBookmark, contentDescription = "Annotations")
+        }
         // Long-press opens the 白い熊 書籍閲覧 UI page directly.
         Box(
             modifier = Modifier

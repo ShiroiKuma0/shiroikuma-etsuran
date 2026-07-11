@@ -65,6 +65,7 @@ import com.aryan.reader.feedback.SupportProjectScreen
 import com.aryan.reader.pdf.PdfViewerScreen
 import com.aryan.reader.shared.ReaderFeatureSurface
 import com.aryan.reader.tts.ReaderTtsMiniBar
+import com.aryan.reader.whitebear.AnnotationLibraryScreen
 import com.aryan.reader.whitebear.WhiteBearUiScreen
 import com.aryan.reader.tts.readerTtsMiniBarBottomPaddingDp
 import com.aryan.reader.tts.shouldShowReaderTtsMiniBar
@@ -81,6 +82,7 @@ object AppDestinations {
     const val AI_SETTINGS_SCREEN_ROUTE = "ai_settings_screen_route"
     const val SETTINGS_SCREEN_ROUTE = "settings_screen_route"
     const val WHITE_BEAR_UI_SCREEN_ROUTE = "white_bear_ui_screen_route"
+    const val ANNOTATION_LIBRARY_SCREEN_ROUTE = "annotation_library_screen_route"
 }
 
 fun shouldInterceptAppNavBack(
@@ -371,7 +373,10 @@ fun AppNavigation(
                             onRenderModeChange = viewModel::setRenderMode,
                             customFonts = customFonts,
                             onImportFonts = viewModel::importFonts,
-                            viewModel = viewModel
+                            viewModel = viewModel,
+                            onOpenWhiteBearUi = {
+                                navController.navigateIfReady(AppDestinations.WHITE_BEAR_UI_SCREEN_ROUTE)
+                            }
                         )
 
                         if (uiState.isLoading) {
@@ -459,6 +464,24 @@ fun AppNavigation(
             WhiteBearUiScreen(
                 viewModel = viewModel,
                 onBackClick = { navController.popBackStackIfReady() }
+            )
+        }
+
+        composable(route = AppDestinations.ANNOTATION_LIBRARY_SCREEN_ROUTE) {
+            AnnotationLibraryScreen(
+                onBackClick = { navController.popBackStackIfReady() },
+                onOpenAnnotation = { entry ->
+                    // Route sync back to the reader only runs from the main route,
+                    // so leave the library before requesting the open.
+                    navController.popBackStackIfReady()
+                    viewModel.openTtsNotificationTarget(
+                        bookId = entry.bookId,
+                        sourceCfi = entry.cfi,
+                        startOffset = entry.charOffset,
+                        chapterIndex = entry.chapterIndex,
+                        pageIndex = entry.pageIndex
+                    )
+                }
             )
         }
         }
