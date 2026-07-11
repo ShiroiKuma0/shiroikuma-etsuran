@@ -170,6 +170,7 @@ import com.aryan.reader.shared.LOCAL_FOLDER_SYNC_DATA_DIR
 import com.aryan.reader.shared.opds.SharedOpdsLocalBookMatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -894,6 +895,22 @@ fun LibraryScreenContent(
         mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
     }
 
+    // 白い熊 UI: the field is the single source of truth while search is open — the query
+    // is pushed to the view model DEBOUNCED, and never written back into the field. The
+    // old per-keystroke round trip re-projected the whole library on every letter and its
+    // stale echo overwrote the field, breaking the IME composition (autocorrect committed
+    // after each character, mangling the input on large libraries).
+    LaunchedEffect(isSearchActive) {
+        if (!isSearchActive) return@LaunchedEffect
+        androidx.compose.runtime.snapshotFlow { textFieldValue.text }
+            .drop(1)
+            .distinctUntilChanged()
+            .collectLatest { query ->
+                delay(220)
+                onSearchQueryChange(query)
+            }
+    }
+
     LaunchedEffect(isSearchActive) {
         if (isSearchActive) {
             searchFocusRequester.requestFocus()
@@ -944,10 +961,7 @@ fun LibraryScreenContent(
                             }
                             OutlinedTextField(
                                 value = textFieldValue,
-                                onValueChange = {
-                                    textFieldValue = it
-                                    onSearchQueryChange(it.text)
-                                },
+                                onValueChange = { textFieldValue = it },
                                 placeholder = { Text(stringResource(R.string.search_placeholder)) },
                                 modifier = Modifier
                                     .weight(1f)
@@ -963,13 +977,11 @@ fun LibraryScreenContent(
                                     unfocusedIndicatorColor = Color.Transparent,
                                 ),
                                 trailingIcon = {
-                                    if (searchQuery.isNotEmpty()) {
-                                        IconButton(
-                                            onClick = {
-                                                textFieldValue = TextFieldValue("", TextRange.Zero)
-                                                onSearchQueryChange("")
-                                            }
-                                        ) {
+                                    if (textFieldValue.text.isNotEmpty()) {
+                                        IconButton(onClick = {
+                                            textFieldValue = TextFieldValue("")
+                                            onSearchQueryChange("")
+                                        }) {
                                             Icon(Icons.Default.Close, contentDescription = stringResource(R.string.content_desc_clear_query))
                                         }
                                     }
