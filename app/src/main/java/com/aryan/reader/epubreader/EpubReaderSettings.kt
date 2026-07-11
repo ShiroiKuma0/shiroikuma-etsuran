@@ -844,13 +844,34 @@ fun ReaderTextFormatPanel(
                         formatValue = { if (it in 0.99f..1.01f) originalLabel else "%.1fx".format(it) }
                     )
 
-                    FormatSlider(
-                        label = stringResource(R.string.label_image_size),
-                        value = currentImageSize,
-                        onValueChange = onImageSizeChange,
-                        valueRange = 0.5f..2.0f,
-                        formatValue = { if (it in 0.99f..1.01f) originalLabel else "%.1fx".format(it) }
-                    )
+                    // 白い熊 UI: image size 0 is the "original sizes" sentinel — the reader
+                    // stops resizing images entirely and the books' own CSS (or the
+                    // natural pixel size) applies. The slider hides while it is active.
+                    if (currentImageSize != 0f) {
+                        FormatSlider(
+                            label = stringResource(R.string.label_image_size),
+                            value = currentImageSize,
+                            onValueChange = onImageSizeChange,
+                            valueRange = 0.5f..2.0f,
+                            formatValue = { if (it in 0.99f..1.01f) originalLabel else "%.1fx".format(it) }
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Original image sizes (no resizing)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = currentImageSize == 0f,
+                            onCheckedChange = { on ->
+                                onImageSizeChange(if (on) 0f else DEFAULT_IMAGE_SIZE_VAL)
+                            }
+                        )
+                    }
 
                     FormatSlider(
                         label = stringResource(R.string.label_horizontal_margin),

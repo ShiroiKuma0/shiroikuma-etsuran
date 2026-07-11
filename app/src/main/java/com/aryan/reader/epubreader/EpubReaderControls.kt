@@ -16,6 +16,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -352,6 +353,7 @@ internal fun buildReaderToolbarItems(
 fun EpubReaderTopBar(
     isVisible: Boolean,
     searchState: SearchState,
+    onOpenWhiteBearUi: () -> Unit = {},
     bookTitle: String,
     currentRenderMode: RenderMode,
     isBookmarked: Boolean,
@@ -587,15 +589,22 @@ fun EpubReaderTopBar(
                         var showHiddenToolsExpanded by remember { mutableStateOf(false) }
                         var showReadingModeExpanded by remember { mutableStateOf(false) }
                         var showTtsSettingsExpanded by remember { mutableStateOf(false) }
-                        TooltipIconButton(
-                            text = stringResource(R.string.tooltip_more_options),
-                            description = stringResource(R.string.tooltip_more_options_desc),
-                            onClick = {
-                                showHiddenToolsExpanded = false
-                                showReadingModeExpanded = false
-                                showTtsSettingsExpanded = false
-                                showMoreMenu = true
-                            }
+                        // 白い熊 UI: long-press opens the 白い熊 書籍閲覧 UI page directly
+                        // (mirrors the home screen's settings long-press).
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .combinedClickable(
+                                    onClick = {
+                                        showHiddenToolsExpanded = false
+                                        showReadingModeExpanded = false
+                                        showTtsSettingsExpanded = false
+                                        showMoreMenu = true
+                                    },
+                                    onLongClick = onOpenWhiteBearUi
+                                ),
+                            contentAlignment = Alignment.Center
                         ) {
                             Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.content_desc_more_options))
                         }
