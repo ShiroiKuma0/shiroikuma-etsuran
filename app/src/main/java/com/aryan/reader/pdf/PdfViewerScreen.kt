@@ -334,7 +334,7 @@ fun PdfViewerScreen(
     initialBookmarksJson: String?,
     isProUser: Boolean,
     onNavigateBack: () -> Unit,
-    onSavePosition: (page: Int, totalPages: Int) -> Unit,
+    onSavePosition: suspend (uri: Uri, page: Int, totalPages: Int) -> Unit,
     onBookmarksChanged: (bookmarksJson: String) -> Unit,
     onNavigateToPro: () -> Unit,
     viewModel: MainViewModel
@@ -369,7 +369,10 @@ fun PdfViewerScreen(
     }
     val isPdfDarkMode = activeTheme.isDark || activeTheme.id == "reverse"
     var pageAspectRatios by remember { mutableStateOf<List<Float>>(emptyList()) }
-    var showBars by rememberSaveable { mutableStateOf(true) }
+    // Reader chrome starts hidden for every document; a reader tap reveals it.
+    // This is intentionally not saveable so reopening a document uses the same
+    // distraction-free default.
+    var showBars by remember { mutableStateOf(false) }
     var systemUiMode by remember { mutableStateOf(loadPdfSystemUiMode(context)) }
     var showVerticalPageGap by remember { mutableStateOf(loadPdfVerticalPageGapVisible(context)) }
     var showPageNumberOverlay by remember { mutableStateOf(loadPdfPageNumberOverlayVisible(context)) }
@@ -542,6 +545,7 @@ fun PdfViewerScreen(
     }
 
     LaunchedEffect(bookId) {
+        showBars = false
         val savedIsScrollLocked = loadPdfScrollLocked(context, bookId)
         val savedLockedState = loadPdfLockedState(context, bookId)
         val activeCamera = activePdfCameraAfterLockPreferenceLoad(
@@ -1170,15 +1174,13 @@ fun PdfViewerScreen(
         allowHighQualityFallback: Boolean = true
     ): List<SpeechBubble> {
         val document = pdfDocument
-        val shouldUsePrefetchBitmap =
+        val prefetchDocument = document?.takeIf {
             allowHighQualityFallback &&
-                document != null &&
                 !viewModel.hasCachedSpeechBubbles(bookId, sourcePageIndex)
-        val detectionBitmap = if (shouldUsePrefetchBitmap) {
-            renderSpeechBubblePrefetchBitmap(document!!, sourcePageIndex) ?: fallbackBitmap
-        } else {
-            fallbackBitmap
         }
+        val detectionBitmap = prefetchDocument
+            ?.let { renderSpeechBubblePrefetchBitmap(it, sourcePageIndex) }
+            ?: fallbackBitmap
         val ownsBitmap = detectionBitmap !== fallbackBitmap
 
         return try {
@@ -1372,6 +1374,9 @@ fun PdfViewerScreen(
     val currentTotalPages by rememberUpdatedState(totalDisplayPages)
     val currentPageState by rememberUpdatedState(currentPage)
     val currentPendingPage by rememberUpdatedState(pendingRestorePage)
+    val currentIsDocumentReady by rememberUpdatedState(isDocumentReady)
+    val currentInitialScrollDone by rememberUpdatedState(initialScrollDone)
+    val currentPdfUri by rememberUpdatedState(effectivePdfUri)
     val currentVisibleAllAnnotations by rememberUpdatedState(visibleAllAnnotations)
 
     val saveAllData = remember(currentBookId, annotationRepository, textBoxRepository, highlightRepository) {
@@ -1383,8 +1388,12 @@ fun PdfViewerScreen(
                 loadedSidecarBookIdSnapshot,
                 currentAreAnnotationsLoaded
             )
-            val isDocumentReadySnapshot = isDocumentReady
-            val initialScrollDoneSnapshot = initialScrollDone
+            // saveAllData is remembered for the life of a document. Read these changing
+            // values through rememberUpdatedState so a pause never saves the initial
+            // restoration target after the reader has moved on.
+            val isDocumentReadySnapshot = currentIsDocumentReady
+            val initialScrollDoneSnapshot = currentInitialScrollDone
+            val pdfUriSnapshot = currentPdfUri
             val annotsSnapshot = currentAnnotations
             val boxesSnapshot = currentTextBoxes
             val highlightsSnapshot = currentHighlights
@@ -1407,11 +1416,13 @@ fun PdfViewerScreen(
                 val totalPgs = totalPagesSnapshot
 
                 val restoreTarget = pendingPageSnapshot ?: 0
-                val page = if (!initialScrollDoneSnapshot) {
+                val page = pdfPageToPersist(
+                    initialRestorationComplete = initialScrollDoneSnapshot,
+                    currentPage = currentPageSnapshot,
+                    pendingRestorePage = pendingPageSnapshot
+                )
+                if (!initialScrollDoneSnapshot) {
                     Timber.tag("PdfPositionDebug").i("UI: Save during restoration | Using restoreTarget: $restoreTarget (CurrentUI: $currentPageSnapshot)")
-                    restoreTarget
-                } else {
-                    currentPageSnapshot
                 }
 
                 Timber.tag("PdfPositionDebug").v("UI: Save logic | Choosing: $page (UI: $currentPageSnapshot, Target: $restoreTarget, Done: $initialScrollDoneSnapshot)")
@@ -1493,7 +1504,7 @@ fun PdfViewerScreen(
                                 Timber.tag("PdfPositionDebug").d("UI: COMMIT SAVE | Page: $page | Total: $totalPgs | Force: $force")
                                 if (totalPgs > 0) {
                                     withContext(Dispatchers.Main) {
-                                        onSavePosition(page, totalPgs)
+                                        onSavePosition(pdfUriSnapshot, page, totalPgs)
                                     }
                                 }
                                 lastSavedHashes[4] = page
@@ -2682,8 +2693,9 @@ fun PdfViewerScreen(
     val saveLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/pdf")
     ) { uri ->
-        if (uri != null && pendingSaveMode != null) {
-            when (pendingSaveMode) {
+        val saveMode = pendingSaveMode
+        if (uri != null && saveMode != null) {
+            when (saveMode) {
                 SaveMode.ANNOTATED -> {
                     if (currentBookId != null) {
                         coroutineScope.launch {
@@ -2711,8 +2723,6 @@ fun PdfViewerScreen(
                 SaveMode.ORIGINAL -> {
                     viewModel.saveOriginalPdf(effectivePdfUri, uri)
                 }
-
-                null -> Unit
             }
         }
         pendingSaveMode = null
@@ -6225,9 +6235,8 @@ fun PdfViewerScreen(
                                 activeColor = pdfReaderSliderColors.activeTrackColor,
                                 inactiveColor = pdfReaderSliderColors.inactiveTrackColor,
                                 thumbColor = pdfReaderSliderColors.thumbColor,
-                                markerValue = sliderStartPage.toFloat(),
-                                markerColor = pdfReaderSliderColors.bookmarkColor,
                                 modifier = Modifier
+                                    .testTag("PdfPageSlider")
                                     .weight(1f)
                                     .height(32.dp)
                             )
@@ -6771,6 +6780,7 @@ fun PdfViewerScreen(
                     showAllTextHighlights = showAllTextHighlights,
                     isHighlightingLoading = isHighlightingLoading,
                     isEditMode = isEditMode,
+                    isScrollLocked = isScrollLocked,
                     isTtsSessionActive = isTtsSessionActive,
                     isSliderActive = isPageSliderVisible,
                     ttsErrorMessage = null,
@@ -7228,7 +7238,15 @@ fun PdfViewerScreen(
                     }
 
                     val currentDensity = LocalDensity.current
-                    val isImeVisible = WindowInsets.ime.getBottom(currentDensity) > 0
+                    val imeHeightPx = WindowInsets.ime.getBottom(currentDensity)
+                    val isImeVisible = imeHeightPx > 0
+                    val windowHeightPx = window?.windowManager?.currentWindowMetrics?.bounds?.height()
+                        ?: view.rootView.height
+                    val applyImePadding = shouldApplyPdfTextDockImePadding(
+                        layoutHeightPx = constraints.maxHeight,
+                        windowHeightPx = windowHeightPx,
+                        imeHeightPx = imeHeightPx
+                    )
 
                     val extraPadding = if (isImeVisible) 0.dp else bottomPadding
 
@@ -7266,7 +7284,15 @@ fun PdfViewerScreen(
                     Box(modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+                        .then(
+                            when {
+                                applyImePadding -> Modifier.windowInsetsPadding(
+                                    WindowInsets.ime.union(WindowInsets.navigationBars)
+                                )
+                                !isImeVisible -> Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+                                else -> Modifier
+                            }
+                        )
                         .padding(bottom = extraPadding)
                     ) {
                         TextAnnotationDock(
@@ -7532,6 +7558,10 @@ fun PdfViewerScreen(
         }
     }
 
+    // Keep the long-lived reader state above separate from transient overlays.
+    // Besides isolating recomposition concerns, this prevents this screen's JVM
+    // method from exceeding the platform's 64 KB bytecode limit.
+    PdfViewerTransientOverlays {
     if (showAiHubSheet) {
         val currentPageForDisplay = if (displayMode == DisplayMode.PAGINATION) {
             currentPaginationDisplayPage()
@@ -8350,4 +8380,10 @@ fun PdfViewerScreen(
             onDismiss = { showCustomizeToolsSheet = false }
         )
     }
+    }
+}
+
+@Composable
+private fun PdfViewerTransientOverlays(content: @Composable () -> Unit) {
+    content()
 }

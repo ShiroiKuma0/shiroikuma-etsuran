@@ -57,6 +57,7 @@ import androidx.work.WorkManager
 import com.aryan.reader.data.BookMetadata
 import com.aryan.reader.data.BookMetadataEdit
 import com.aryan.reader.data.CloudflareRepository
+import com.aryan.reader.data.AppDatabase
 import com.aryan.reader.data.CustomFontEntity
 import com.aryan.reader.data.FeedbackRepository
 import com.aryan.reader.data.FirestoreRepository
@@ -540,9 +541,10 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 val savedSortOrderName = prefs.getString(
                     KEY_SORT_ORDER, SortOrder.RECENT.name
                 )
-                SortOrder.valueOf(
-                    savedSortOrderName ?: SortOrder.RECENT.name
-                )
+                when (savedSortOrderName) {
+                    null -> SortOrder.RECENT
+                    else -> SortOrder.valueOf(savedSortOrderName)
+                }
             } catch (_: IllegalArgumentException) {
                 SortOrder.RECENT
             },
@@ -556,11 +558,13 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
             } catch (_: IllegalArgumentException) {
                 AddBooksSource.UNSHELVED
             },
-            mainScreenStartPage = prefs.getInt(KEY_MAIN_SCREEN_START_PAGE, 0).coerceIn(0, 1),
+            mainScreenStartPage = prefs.getInt(KEY_MAIN_SCREEN_START_PAGE, 0).coerceIn(0, 2),
             libraryScreenStartPage = prefs.getInt(
                 KEY_LIBRARY_SCREEN_START_PAGE,
                 0
             ).coerceIn(0, if (BuildConfig.IS_OFFLINE) 2 else 3),
+            unifiedLibrarySection = prefs.getInt(KEY_UNIFIED_LIBRARY_SECTION, 0)
+                .coerceIn(0, if (BuildConfig.IS_OFFLINE) 2 else 3),
             viewingShelfId = prefs.getString(KEY_LAST_VIEWING_SHELF_ID, null),
             isAddingBooksToShelf = prefs.getBoolean(KEY_LAST_ADDING_BOOKS_TO_SHELF, false),
             currentUser = authRepository.getSignedInUser(),
@@ -610,7 +614,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         )
     )
 
-    private suspend fun prepareBookForImport(externalUri: Uri): ImportResult? {
+    private suspend fun prepareBookForImport(externalUri: Uri): ImportResult? = withContext(Dispatchers.IO) {
         val displayName = getFileNameFromUri(externalUri, appContext)
         var type = getFileTypeFromUri(externalUri, appContext)
 
@@ -619,7 +623,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         }
         if (hash == null) {
             Timber.e("Failed to process file hash for $externalUri")
-            return null
+            return@withContext null
         }
 
         val existingItem = recentFilesRepository.getFileByBookId(hash)
@@ -632,7 +636,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             } else {
                 Timber.i("Book with ID: $hash already exists. Skipping import.")
-                return null
+                return@withContext null
             }
         }
 
@@ -643,7 +647,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
             Timber.d("MainViewModel: Calibre processZip returned: $bundleResult")
 
             if (bundleResult != null) {
-                return ImportResult(
+                return@withContext ImportResult(
                     internalUri = bundleResult.internalBookUri,
                     bookId = hash,
                     type = bundleResult.type,
@@ -653,11 +657,11 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
             if (type == null) type = FileType.CBZ
         }
 
-        if (type == null) return null
+        if (type == null) return@withContext null
 
         Timber.i("Importing new book with ID: $hash")
-        val internalFile = bookImporter.importBook(externalUri) ?: return null
-        return ImportResult(internalFile.toUri(), hash, type, null)
+        val internalFile = bookImporter.importBook(externalUri) ?: return@withContext null
+        return@withContext ImportResult(internalFile.toUri(), hash, type, null)
     }
 
     val libraryFlow = combine(
@@ -835,7 +839,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun addSelectedBooksToShelves(shelfIds: Set<String>, bookIds: Set<String>) {
         val sanitizedBookIds = SharedLibraryEditor.cleanBookIds(bookIds)
-        val mutableManualShelfIds = _internalState.value.shelves
+        val mutableManualShelfIds = uiState.value.shelves
             .filter { shelf -> shelf.type == ShelfType.MANUAL && SharedLibraryEditor.canMutateShelf(shelf.id) }
             .mapTo(mutableSetOf()) { shelf -> shelf.id }
         val sanitizedShelfIds = shelfIds
@@ -901,9 +905,11 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         val cleanTagId = tagId.trim().takeIf { it.isNotBlank() } ?: return
         viewModelScope.launch {
             recentFilesRepository.deleteTag(cleanTagId)
+            val projectedFilters = uiState.value.libraryFilters
             val currentFilters = _internalState.value.libraryFilters
-            if (cleanTagId in currentFilters.tagIds) {
-                updateLibraryFilters(currentFilters.copy(tagIds = currentFilters.tagIds - cleanTagId))
+            val filtersToUpdate = if (cleanTagId in projectedFilters.tagIds) projectedFilters else currentFilters
+            if (cleanTagId in filtersToUpdate.tagIds) {
+                updateLibraryFilters(filtersToUpdate.copy(tagIds = filtersToUpdate.tagIds - cleanTagId))
             }
         }
     }
@@ -3971,30 +3977,52 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                     .filterNot { it.isManualOnlyReaderFile() }
             }
 
-            val localShelfNames = prefs.getStringSet(KEY_SHELVES, emptySet()).orEmpty()
             val remoteBooks = remoteBooksDeferred.await()
                 .filterNot { it.isManualOnlyReaderFile() }
-            val remoteShelves = remoteShelvesDeferred.await()
+            val rawRemoteShelves = remoteShelvesDeferred.await()
             val initialDriveFiles = withContext(Dispatchers.IO) {
                 googleDriveRepository.getFiles(accessToken)?.files.orEmpty().associateBy { it.name }
             }
             logCloudSyncTrace {
                 "android.full_sync.loaded user=${currentUser.uid} device=$deviceId " +
                     "localBooks=${localBooks.size} remoteBooks=${remoteBooks.size} " +
-                    "remoteShelves=${remoteShelves.size} driveFiles=${initialDriveFiles.size}"
+                    "remoteShelves=${rawRemoteShelves.size} driveFiles=${initialDriveFiles.size}"
             }
             val syncableBookIds = (localBooks.map { it.bookId } + remoteBooks.map { it.bookId }).toSet()
-            val allKnownShelfNames =
-                (localShelfNames + remoteShelves.map { it.name }).toSet()
-            val localShelves = allKnownShelfNames.mapNotNull { name ->
-                val timestamp = prefs.getLong("$KEY_SHELF_TIMESTAMP_PREFIX$name", 0L)
-                if (timestamp == 0L && name !in localShelfNames) return@mapNotNull null
-                val bookIds = prefs.getStringSet(
-                    "$KEY_SHELF_CONTENT_PREFIX$name", emptySet()
-                ).orEmpty().filter { it in syncableBookIds }
-                val isDeleted = prefs.getBoolean("$KEY_SHELF_DELETED_PREFIX$name", false)
-                ShelfMetadata(name, bookIds, timestamp, isDeleted)
+            val shelfDao = AppDatabase.getDatabase(appContext).shelfDao()
+            val localShelfEntities = shelfDao.getAllUserShelvesForSync()
+            val localShelfIdByName = localShelfEntities.associate { it.name to it.id }
+            val localShelves = localShelfEntities.map { shelf ->
+                val bookIds = shelfDao.getCrossRefsForShelf(shelf.id)
+                    .map { it.bookId }.filter { it in syncableBookIds }
+                ShelfMetadata(
+                    shelfId = shelf.id,
+                    name = shelf.name,
+                    bookIds = bookIds,
+                    lastModifiedTimestamp = shelf.updatedAt,
+                    isDeleted = shelf.isDeleted
+                )
             }
+            val remoteShelfNamesWithStableIds = rawRemoteShelves
+                .filter { it.shelfId.isNotBlank() }
+                .mapTo(mutableSetOf()) { it.name }
+            rawRemoteShelves
+                .filter { it.shelfId.isBlank() && it.name in remoteShelfNamesWithStableIds }
+                .forEach { legacy ->
+                    runCatching {
+                        firestoreRepository.deleteShelfDocument(currentUser.uid, legacy.legacyDocumentId)
+                    }.onFailure { error ->
+                        Timber.w(error, "Unable to remove superseded legacy shelf ${legacy.name}")
+                    }
+                }
+            val remoteShelves = rawRemoteShelves
+                .filter { it.shelfId.isNotBlank() || it.name !in remoteShelfNamesWithStableIds }
+                .map { remote ->
+                    if (remote.shelfId.isNotBlank()) remote else remote.copy(
+                        shelfId = localShelfIdByName[remote.name]
+                            ?: "legacy_${remote.legacyDocumentId.hashCode().toUInt().toString(16)}"
+                    )
+                }
 
             // 3. Merge Books
             val localBooksMap = localBooks.associateBy { it.bookId }
@@ -4284,13 +4312,13 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
 
-            val localShelvesMap = localShelves.associateBy { it.name }
-            val remoteShelvesMap = remoteShelves.associateBy { it.name }
-            val allShelfNames = (localShelvesMap.keys + remoteShelvesMap.keys).distinct()
+            val localShelvesMap = localShelves.associateBy { it.shelfId }
+            val remoteShelvesMap = remoteShelves.associateBy { it.shelfId }
+            val allShelfIds = (localShelvesMap.keys + remoteShelvesMap.keys).distinct()
 
-            allShelfNames.forEach { shelfName ->
-                val local = localShelvesMap[shelfName]
-                val remote = remoteShelvesMap[shelfName]
+            allShelfIds.forEach { shelfId ->
+                val local = localShelvesMap[shelfId]
+                val remote = remoteShelvesMap[shelfId]
 
                 when {
                     local != null && remote == null -> firestoreRepository.syncShelf(
@@ -4298,57 +4326,29 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                     )
 
                     local == null && remote != null -> {
-                        prefs.edit {
-                            val currentShelves =
-                                prefs.getStringSet(KEY_SHELVES, emptySet())?.toMutableSet()
-                                    ?: mutableSetOf()
-                            if (remote.isDeleted) {
-                                currentShelves.remove(remote.name)
-                                remove("$KEY_SHELF_CONTENT_PREFIX${remote.name}")
-                            } else {
-                                currentShelves.add(remote.name)
-                                putStringSet(
-                                    "$KEY_SHELF_CONTENT_PREFIX${remote.name}",
-                                    remote.bookIds.filter { it in syncableBookIds }.toSet()
-                                )
-                            }
-                            putStringSet(KEY_SHELVES, currentShelves)
-                            putLong(
-                                "$KEY_SHELF_TIMESTAMP_PREFIX${remote.name}",
-                                remote.lastModifiedTimestamp
-                            )
-                            putBoolean(
-                                "$KEY_SHELF_DELETED_PREFIX${remote.name}", remote.isDeleted
-                            )
+                        val applied = recentFilesRepository.applyRemoteShelf(
+                            remote.shelfId, remote.name, remote.bookIds.filter { it in syncableBookIds },
+                            remote.lastModifiedTimestamp, remote.isDeleted
+                        )
+                        if (applied && remote.legacyDocumentId != remote.shelfId) {
+                            firestoreRepository.syncShelf(currentUser.uid, remote, deviceId)
                         }
                     }
 
                     local != null && remote != null -> {
                         if (local.lastModifiedTimestamp > remote.lastModifiedTimestamp) {
-                            firestoreRepository.syncShelf(currentUser.uid, local, deviceId)
+                            firestoreRepository.syncShelf(
+                                currentUser.uid,
+                                local.copy(legacyDocumentId = remote.legacyDocumentId),
+                                deviceId
+                            )
                         } else if (remote.lastModifiedTimestamp > local.lastModifiedTimestamp) {
-                            prefs.edit {
-                                val currentShelves =
-                                    prefs.getStringSet(KEY_SHELVES, emptySet())?.toMutableSet()
-                                        ?: mutableSetOf()
-                                if (remote.isDeleted) {
-                                    currentShelves.remove(remote.name)
-                                    remove("$KEY_SHELF_CONTENT_PREFIX${remote.name}")
-                                } else {
-                                    currentShelves.add(remote.name)
-                                    putStringSet(
-                                        "$KEY_SHELF_CONTENT_PREFIX${remote.name}",
-                                        remote.bookIds.filter { it in syncableBookIds }.toSet()
-                                    )
-                                }
-                                putStringSet(KEY_SHELVES, currentShelves)
-                                putLong(
-                                    "$KEY_SHELF_TIMESTAMP_PREFIX${remote.name}",
-                                    remote.lastModifiedTimestamp
-                                )
-                                putBoolean(
-                                    "$KEY_SHELF_DELETED_PREFIX${remote.name}", remote.isDeleted
-                                )
+                            val applied = recentFilesRepository.applyRemoteShelf(
+                                remote.shelfId, remote.name, remote.bookIds.filter { it in syncableBookIds },
+                                remote.lastModifiedTimestamp, remote.isDeleted
+                            )
+                            if (applied && remote.legacyDocumentId != remote.shelfId) {
+                                firestoreRepository.syncShelf(currentUser.uid, remote, deviceId)
                             }
                         }
                     }
@@ -5225,7 +5225,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val importResult = prepareBookForImport(externalUri)
 
@@ -5300,7 +5300,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 contextualActionItems = emptySet()
             )
         }
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val type = getFileTypeFromUri(externalUri, appContext)
             if (type == null) {
                 _internalState.update {
@@ -6167,36 +6167,31 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun savePdfReadingPosition(page: Int, totalPages: Int) {
-        val currentPdfUri = _internalState.value.selectedPdfUri
-        if (currentPdfUri != null) {
-            val progress = if (totalPages > 0) {
-                ((page + 1).toFloat() / totalPages.toFloat()) * 100f
-            } else {
-                0f
-            }
-            Timber.tag("PdfPositionDebug").i("ViewModel: Save request triggered | Page: $page | Total: $totalPages | Progress: $progress | URI: ${currentPdfUri.lastPathSegment}")
-            viewModelScope.launch {
-                recentFilesRepository.getFileByUri(currentPdfUri.toString())?.let { existing ->
-                    logCloudSyncTrace {
-                        "android.reader.pdf_position_save_start book=${existing.bookId} beforeTs=${existing.lastModifiedTimestamp} " +
-                            "beforeReadTs=${existing.effectiveReadingPositionModifiedTimestamp()} page=$page progress=$progress"
-                    }
-                    recentFilesRepository.updatePdfReadingPosition(
-                        uriString = currentPdfUri.toString(), page = page, progress = progress
-                    )
-                    val updated = recentFilesRepository.getFileByBookId(existing.bookId)
-                    logCloudSyncTrace {
-                        "android.reader.pdf_position_save_done beforeTs=${existing.lastModifiedTimestamp} " +
-                            (updated?.cloudSyncTraceSummary("after") ?: "after=null")
-                    }
-                    queueCloudMetadataUpload(existing.bookId, reason = "pdf_position")
-                } ?: run {
-                    Timber.tag("PdfPositionDebug").e("ViewModel: Save aborted. Could not resolve file item from URI in DB.")
-                }
-            }
+    suspend fun savePdfReadingPosition(uri: Uri, page: Int, totalPages: Int) {
+        val progress = if (totalPages > 0) {
+            ((page + 1).toFloat() / totalPages.toFloat()) * 100f
         } else {
-            Timber.tag("PdfPositionDebug").w("ViewModel: Save aborted. No selectedPdfUri found in state.")
+            0f
+        }
+        Timber.tag("PdfPositionDebug").i(
+            "ViewModel: Save request triggered | Page: $page | Total: $totalPages | Progress: $progress | URI: ${uri.lastPathSegment}"
+        )
+        recentFilesRepository.getFileByUri(uri.toString())?.let { existing ->
+            logCloudSyncTrace {
+                "android.reader.pdf_position_save_start book=${existing.bookId} beforeTs=${existing.lastModifiedTimestamp} " +
+                    "beforeReadTs=${existing.effectiveReadingPositionModifiedTimestamp()} page=$page progress=$progress"
+            }
+            recentFilesRepository.updatePdfReadingPosition(
+                uriString = uri.toString(), page = page, progress = progress
+            )
+            val updated = recentFilesRepository.getFileByBookId(existing.bookId)
+            logCloudSyncTrace {
+                "android.reader.pdf_position_save_done beforeTs=${existing.lastModifiedTimestamp} " +
+                    (updated?.cloudSyncTraceSummary("after") ?: "after=null")
+            }
+            queueCloudMetadataUpload(existing.bookId, reason = "pdf_position")
+        } ?: run {
+            Timber.tag("PdfPositionDebug").e("ViewModel: Save aborted. Could not resolve file item from URI in DB.")
         }
     }
 
@@ -6509,7 +6504,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun setMainScreenPage(page: Int) {
-        val sanitizedPage = page.coerceIn(0, 1)
+        val sanitizedPage = page.coerceIn(0, 2)
         if (_internalState.value.mainScreenStartPage == sanitizedPage) return
         _internalState.update {
             it.copy(
@@ -6527,6 +6522,14 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         _internalState.update {
             it.copy(libraryScreenStartPage = sanitizedPage)
         }
+        persistLibraryLandingState()
+    }
+
+    fun setUnifiedLibrarySection(section: Int) {
+        val maxSection = if (BuildConfig.IS_OFFLINE) 2 else 3
+        val sanitizedSection = section.coerceIn(0, maxSection)
+        if (_internalState.value.unifiedLibrarySection == sanitizedSection) return
+        _internalState.update { it.copy(unifiedLibrarySection = sanitizedSection) }
         persistLibraryLandingState()
     }
 
@@ -6683,6 +6686,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch(Dispatchers.IO) {
             val db = com.aryan.reader.data.AppDatabase.getDatabase(appContext)
             val shelf = db.shelfDao().getShelfById(shelfId) ?: return@launch
+            if (shelf.isSmart) return@launch
             val crossRefs = db.shelfDao().getCrossRefsForShelf(shelfId)
             val manualOnlyBookIds = recentFilesRepository.getAllFilesForSync()
                 .filter { it.isManualOnlyReaderFile() }
@@ -6691,6 +6695,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
                 .filterNot { it in manualOnlyBookIds }
 
             val shelfMetadata = ShelfMetadata(
+                shelfId = shelf.id,
                 name = shelf.name,
                 bookIds = bookIds,
                 isDeleted = shelf.isDeleted,
@@ -6740,6 +6745,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         prefs.edit {
             putInt(KEY_MAIN_SCREEN_START_PAGE, state.mainScreenStartPage)
             putInt(KEY_LIBRARY_SCREEN_START_PAGE, state.libraryScreenStartPage)
+            putInt(KEY_UNIFIED_LIBRARY_SECTION, state.unifiedLibrarySection)
             putString(KEY_LAST_VIEWING_SHELF_ID, resolvedUiState.viewingShelfId)
             putBoolean(KEY_LAST_ADDING_BOOKS_TO_SHELF, resolvedUiState.isAddingBooksToShelf)
         }
@@ -7608,6 +7614,7 @@ open class MainViewModel(application: Application) : AndroidViewModel(applicatio
         private const val KEY_APP_TEXT_DIM_FACTOR_LIGHT = "app_text_dim_factor_light"
         private const val KEY_APP_TEXT_DIM_FACTOR_DARK = "app_text_dim_factor_dark"
         private const val KEY_APP_FONT_KIND = "app_font_kind"
+        private const val KEY_UNIFIED_LIBRARY_SECTION = "unified_library_section"
         private const val KEY_APP_FONT_CUSTOM_ID = "app_font_custom_id"
         private const val KEY_CUSTOM_APP_THEMES = "custom_app_themes"
 

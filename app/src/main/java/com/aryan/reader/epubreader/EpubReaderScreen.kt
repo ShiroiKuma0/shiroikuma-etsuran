@@ -1092,6 +1092,11 @@ fun EpubReaderHost(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     var showBars by remember { mutableStateOf(false) }
     val chapters = remember(epubBook.chapters) { epubBook.chapters }
+
+    LaunchedEffect(epubBook, uiState.selectedBookId) {
+        showBars = false
+    }
+
     var readerImages by remember(epubBook) { mutableStateOf<List<EpubReaderImageReference>>(emptyList()) }
 
     LaunchedEffect(epubBook) {
@@ -1135,15 +1140,13 @@ fun EpubReaderHost(
     var chapterHead by remember(currentChapterIndex) { mutableStateOf("") }
     val epubFontFaceCss = remember(epubBook.css, epubBook.extractionBasePath) {
         val fontFaces = epubBook.css.flatMap { (path, content) ->
-            CssParser.parse(
+            CssParser.parseFontFaces(
                 cssContent = content,
                 cssPath = path,
-                baseFontSizeSp = 16f,
-                density = 1f,
                 constraints = Constraints(maxWidth = 1, maxHeight = 1),
                 isDarkTheme = false,
                 adaptThemeColors = false
-            ).fontFaces
+            )
         }
         buildEpubFontFaceCss(fontFaces, epubBook.extractionBasePath)
     }
@@ -2508,11 +2511,11 @@ fun EpubReaderHost(
 
         if (initialScrollTargetForChapter == ChapterScrollPosition.END) {
             loadUpToChunkIndex = max(0, result.chunks.size - 1)
-            loadedChunkCount = result.chunks.size
+            loadedChunkCount = initialReaderLoadedChunkCount(result.chunks.size, loadUpToChunkIndex)
             topVisibleChunkIndex = loadUpToChunkIndex
         } else {
             loadUpToChunkIndex = result.startChunkIndex
-            loadedChunkCount = min(result.chunks.size, result.startChunkIndex + 2)
+            loadedChunkCount = initialReaderLoadedChunkCount(result.chunks.size, result.startChunkIndex)
             topVisibleChunkIndex = 0
         }
 
@@ -2726,6 +2729,15 @@ fun EpubReaderHost(
         pageInfoMode = pageInfoMode,
         showReaderChrome = showBars
     )
+
+    LaunchedEffect(showBars, pageInfoMode, currentRenderMode, isNativeVerticalMode) {
+        Timber.tag("ReaderInteractionDiag").d(
+            "chrome_state mode=$currentRenderMode nativeVertical=$isNativeVerticalMode showBars=$showBars " +
+                "pageInfoMode=$pageInfoMode pageInfoVisible=$isPageInfoVisible " +
+                "reservePageInfoSpace=${shouldReserveEpubPageInfoBarSpace(pageInfoMode, showBars, isNativeVerticalMode)} " +
+                "pagerInitialized=$isPagerInitialized reconfigurationRestoring=$isPaginatedReconfigurationRestoring"
+        )
+    }
 
     fun androidLocatorCfiToLocator(cfi: String): Locator? {
         val parts = cfi.takeIf { it.startsWith("android-locator:") }?.split(':') ?: return null
@@ -4833,8 +4845,6 @@ fun EpubReaderHost(
                                             chapterChunkElementCounts
                                         ) {
                                             val targetIdx = loadUpToChunkIndex
-                                            val startIdx = 0
-                                            val endIdx = minOf(chapterChunks.lastIndex, targetIdx + 1)
 
                                             chapterChunks.indices.joinToString(separator = "\n") { index ->
                                                 val attributes = readerChunkContainerAttributes(
@@ -4842,10 +4852,14 @@ fun EpubReaderHost(
                                                     chapterChunkElementStartIndices,
                                                     chapterChunkElementCounts
                                                 )
-                                                if (index in startIdx..endIdx) {
+                                                if (shouldInlineInitialReaderChunk(index, chapterChunks.size, targetIdx)) {
                                                     "<div class='chunk-container' $attributes>${chapterChunks[index]}</div>"
                                                 } else {
-                                                    "<div class='chunk-container' $attributes></div>"
+                                                    val placeholderHeightPx = readerChunkPlaceholderHeightPx(
+                                                        index,
+                                                        chapterChunkElementCounts
+                                                    )
+                                                    "<div class='chunk-container' $attributes style='height: ${placeholderHeightPx}px'></div>"
                                                 }
                                             }
                                         }
@@ -4875,15 +4889,13 @@ fun EpubReaderHost(
                                                 .head()
                                                 .getElementsByTag("style")
                                                 .flatMap { styleElement ->
-                                                    CssParser.parse(
+                                                    CssParser.parseFontFaces(
                                                         cssContent = styleElement.data(),
                                                         cssPath = chapterToRender.absPath,
-                                                        baseFontSizeSp = 16f,
-                                                        density = 1f,
                                                         constraints = Constraints(maxWidth = 1, maxHeight = 1),
                                                         isDarkTheme = false,
                                                         adaptThemeColors = false
-                                                    ).fontFaces
+                                                    )
                                                 }
                                             buildEpubFontFaceCss(fontFaces, epubBook.extractionBasePath)
                                         }
@@ -5807,7 +5819,9 @@ fun EpubReaderHost(
                     }
 
                     RenderMode.PAGINATED -> {
-                        val pageInfoReserve = if (isPageInfoVisible) pageInfoBarHeight else 0.dp
+                        val pageInfoReserve = if (
+                            shouldReserveEpubPageInfoBarSpace(pageInfoMode, showBars, isNativeVerticalMode)
+                        ) pageInfoBarHeight else 0.dp
                         val contentTopPadding = if (pageInfoPosition == PageInfoPosition.TOP) pageInfoReserve else 0.dp
                         val contentBottomPadding = if (pageInfoPosition == PageInfoPosition.BOTTOM) pageInfoReserve else 0.dp
 
@@ -7433,7 +7447,15 @@ fun EpubReaderHost(
                     },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = bottomPadding + 45.dp + if (isEpubJumpHistoryVisible) 40.dp else 0.dp),
+                        .padding(
+                            bottom = bottomPadding + 45.dp +
+                                if (isEpubJumpHistoryVisible) 40.dp else 0.dp +
+                                if (isPageInfoVisible && pageInfoPosition == PageInfoPosition.BOTTOM) {
+                                    pageInfoBarHeight
+                                } else {
+                                    0.dp
+                                }
+                        ),
                     activeColor = epubReaderSliderColors.activeTrackColor,
                     inactiveColor = epubReaderSliderColors.inactiveTrackColor,
                     contentColor = epubReaderSliderColors.contentColor

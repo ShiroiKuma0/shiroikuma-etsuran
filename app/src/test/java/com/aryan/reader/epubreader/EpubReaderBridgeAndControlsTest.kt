@@ -21,6 +21,39 @@ import org.robolectric.RobolectricTestRunner
 class EpubReaderBridgeAndControlsTest {
 
     @Test
+    fun `touchpad scrolling hands off only at a chapter boundary`() {
+        assertEquals(
+            WebViewTouchpadBoundary.TOP,
+            webViewTouchpadBoundary(
+                verticalScroll = 1f,
+                canScrollUp = false,
+                canScrollDown = true
+            )
+        )
+        assertEquals(
+            WebViewTouchpadBoundary.BOTTOM,
+            webViewTouchpadBoundary(
+                verticalScroll = -1f,
+                canScrollUp = true,
+                canScrollDown = false
+            )
+        )
+        assertNull(
+            webViewTouchpadBoundary(
+                verticalScroll = -1f,
+                canScrollUp = true,
+                canScrollDown = true
+            )
+        )
+    }
+
+    @Test
+    fun `reader webview viewport policy follows device width css`() {
+        assertFalse(readerResponsiveViewportPolicy.useWideViewPort)
+        assertFalse(readerResponsiveViewportPolicy.loadWithOverviewMode)
+    }
+
+    @Test
     fun `sanitizePlaceholders keeps one header per toolbar section and inserts empty placeholders`() {
         val input = listOf(
             FlatToolItem("old_header", FlatItemType.SECTION_HEADER, section = ToolbarSection.BOTTOM),

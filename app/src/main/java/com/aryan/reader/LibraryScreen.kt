@@ -30,6 +30,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -118,6 +120,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -127,6 +130,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
@@ -424,7 +428,7 @@ fun LibraryScreen(
                 )
             },
             onDeleteCatalogStreams = viewModel::deleteStreamedBooksForCatalog,
-            onSettingsClick = { navController.navigate(AppDestinations.SETTINGS_SCREEN_ROUTE) },
+            onSettingsClick = { navController.navigateIfReady(AppDestinations.SETTINGS_SCREEN_ROUTE) },
             usePdfFileNameAsDisplayName = uiState.usePdfFileNameAsDisplayName
         )
 
@@ -738,17 +742,11 @@ fun LibraryScreenContent(
     val searchFocusRequester = remember { FocusRequester() }
     val selectedBookIds = remember(selectedItems) { selectedItems.mapTo(mutableSetOf()) { it.bookId } }
 
+    // Keep cursor/composition state local while Gboard is editing. Replacing the
+    // field value from the filtered library state can move the cursor behind a
+    // newly entered character or interrupt a held Backspace gesture.
     var textFieldValue by remember(isSearchActive) {
         mutableStateOf(TextFieldValue(searchQuery, TextRange(searchQuery.length)))
-    }
-
-    LaunchedEffect(searchQuery) {
-        if (textFieldValue.text != searchQuery) {
-            textFieldValue = textFieldValue.copy(
-                text = searchQuery,
-                selection = TextRange(searchQuery.length)
-            )
-        }
     }
 
     LaunchedEffect(isSearchActive) {
@@ -820,7 +818,12 @@ fun LibraryScreenContent(
                                 ),
                                 trailingIcon = {
                                     if (searchQuery.isNotEmpty()) {
-                                        IconButton(onClick = { onSearchQueryChange("") }) {
+                                        IconButton(
+                                            onClick = {
+                                                textFieldValue = TextFieldValue("", TextRange.Zero)
+                                                onSearchQueryChange("")
+                                            }
+                                        ) {
                                             Icon(Icons.Default.Close, contentDescription = stringResource(R.string.content_desc_clear_query))
                                         }
                                     }
@@ -1131,17 +1134,45 @@ private fun ShelvesScreen(
 private fun CreateShelfDialog(onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
     var text by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
+    val outlineColor = MaterialTheme.colorScheme.outline
+    val shape = RoundedCornerShape(4.dp)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.create_new_shelf)) },
         text = {
-            OutlinedTextField(
+            BasicTextField(
                 value = text,
                 onValueChange = { text = it },
-                placeholder = { Text(stringResource(R.string.shelf_name_hint)) },
                 singleLine = true,
-                modifier = Modifier.focusRequester(focusRequester)
+                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                    color = MaterialTheme.colorScheme.onSurface
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .focusRequester(focusRequester)
+                    .border(1.dp, outlineColor, shape)
+                    .padding(horizontal = 16.dp),
+                decorationBox = { innerTextField ->
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (text.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.shelf_name_hint),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        innerTextField()
+                    }
+                }
             )
         },
         confirmButton = {
@@ -2086,7 +2117,7 @@ private fun DeleteShelvesConfirmationDialog(
 }
 
 @Composable
-private fun FolderSyncScreen(
+internal fun FolderSyncScreen(
     syncedFolders: List<SyncedFolder>,
     allRecentFiles: List<RecentFileItem>,
     onAddFolderClick: () -> Unit,

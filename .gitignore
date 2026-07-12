@@ -1,5 +1,6 @@
 *.iml
 .gradle
+.gradle-local/
 /local.properties
 /.idea/caches
 /.idea/libraries
@@ -19,7 +20,10 @@ google-services.json
 .kotlin/
 .idea/
 .gradle/
+.kotlin/metadata/
 third_party/pdfium/
+*.xcuserstate
+xcuserdata/
 *.tgz
 cache/
 worker/

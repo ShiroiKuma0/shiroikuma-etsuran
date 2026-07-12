@@ -93,11 +93,8 @@ class ReaderEngine(
         val layoutSignature: ReaderLayoutSignature
     )
 
-    private val paginationCache = object : LinkedHashMap<PaginationCacheKey, List<ReaderPage>>(8, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<PaginationCacheKey, List<ReaderPage>>?): Boolean {
-            return size > 8
-        }
-    }
+    private val paginationCache = mutableMapOf<PaginationCacheKey, List<ReaderPage>>()
+    private val paginationCacheAccessOrder = mutableListOf<PaginationCacheKey>()
 
     fun createSession(
         book: SharedEpubBook,
@@ -326,14 +323,18 @@ class ReaderEngine(
             ?.percentDecodedOrSelf()
 
         val targetChapterIndex = if (pathPart.isBlank()) {
-            sourceIndex
+            state.reader.book.chapters.indexOfFirst { it.fragmentId == fragment }
+                .takeIf { it >= 0 } ?: sourceIndex
         } else {
             val targetPath = resolveEpubPath(sourceChapter.baseHref, pathPart.percentDecodedOrSelf())
             state.reader.book.chapters.indexOfFirst { chapter ->
                 val chapterPath = normalizeEpubPath(chapter.baseHref.orEmpty())
-                chapterPath == targetPath ||
+                (chapter.fragmentId == fragment && chapterPath == targetPath) ||
                     chapter.id == pathPart ||
                     chapterPath.substringAfterLast('/') == targetPath.substringAfterLast('/')
+            }.takeIf { it >= 0 } ?: state.reader.book.chapters.indexOfFirst { chapter ->
+                val chapterPath = normalizeEpubPath(chapter.baseHref.orEmpty())
+                chapterPath == targetPath || chapterPath.substringAfterLast('/') == targetPath.substringAfterLast('/')
             }
         }
 
@@ -540,11 +541,19 @@ class ReaderEngine(
             },
             layoutSignature = settings.layoutSignature()
         )
-        return synchronized(paginationCache) {
-            paginationCache.getOrPut(key) {
-                paginator.paginate(book, settings)
-            }
+        paginationCache[key]?.let { pages ->
+            paginationCacheAccessOrder.remove(key)
+            paginationCacheAccessOrder += key
+            return pages
         }
+        val pages = paginator.paginate(book, settings)
+        paginationCache[key] = pages
+        paginationCacheAccessOrder += key
+        while (paginationCacheAccessOrder.size > 8) {
+            val eldest = paginationCacheAccessOrder.removeAt(0)
+            paginationCache.remove(eldest)
+        }
+        return pages
     }
 
     fun openSearch(state: ReaderSessionState): ReaderSessionState {

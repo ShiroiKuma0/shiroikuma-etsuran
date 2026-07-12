@@ -386,7 +386,7 @@ fun HomeScreen(
                         onUpgradeClick = {
                             scope.launch {
                                 drawerState.close()
-                                navController.navigate(AppDestinations.PRO_SCREEN_ROUTE)
+                                navController.navigateIfReady(AppDestinations.PRO_SCREEN_ROUTE)
                             }
                         },
                         onSyncUpsellClick = {
@@ -397,19 +397,19 @@ fun HomeScreen(
                         onFontsClick = {
                             scope.launch {
                                 drawerState.close()
-                                navController.navigate(AppDestinations.FONTS_SCREEN_ROUTE)
+                                navController.navigateIfReady(AppDestinations.FONTS_SCREEN_ROUTE)
                             }
                         },
                         onAiSettingsClick = {
                             scope.launch {
                                 drawerState.close()
-                                navController.navigate(AppDestinations.AI_SETTINGS_SCREEN_ROUTE)
+                                navController.navigateIfReady(AppDestinations.AI_SETTINGS_SCREEN_ROUTE)
                             }
                         },
                         onSettingsClick = {
                             scope.launch {
                                 drawerState.close()
-                                navController.navigate(AppDestinations.SETTINGS_SCREEN_ROUTE)
+                                navController.navigateIfReady(AppDestinations.SETTINGS_SCREEN_ROUTE)
                             }
                         },
                         navController = navController,
@@ -450,7 +450,7 @@ fun HomeScreen(
                                 },
                                 onAppThemeClick = { showAppThemePanel = true },
                                 onSettingsClick = {
-                                    navController.navigate(AppDestinations.SETTINGS_SCREEN_ROUTE)
+                                    navController.navigateIfReady(AppDestinations.SETTINGS_SCREEN_ROUTE)
                                 },
                                 onTestPanelDetectionClick = { viewModel.testPanelDetection(context) },
                                 onTestSpeechBubbleDetectionClick = { viewModel.testSpeechBubbleDetection(context) },
@@ -592,7 +592,7 @@ fun HomeScreen(
                     if (showUpgradeDialog) {
                         UpgradeDialog(onDismiss = { showUpgradeDialog = false }, onConfirm = {
                             showUpgradeDialog = false
-                            navController.navigate(AppDestinations.PRO_SCREEN_ROUTE)
+                            navController.navigateIfReady(AppDestinations.PRO_SCREEN_ROUTE)
                         })
                     }
 
@@ -1058,58 +1058,8 @@ fun RecentFileCard(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                if (!item.isAvailable) {
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(28.dp),
-                        contentAlignment = Alignment.CenterStart
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = if (isDownloading) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.errorContainer
-                            },
-                            contentColor = if (isDownloading) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onErrorContainer
-                            }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                if (isDownloading) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(14.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Icon(
-                                        Icons.Filled.Info,
-                                        contentDescription = stringResource(R.string.not_available_locally),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                                Text(
-                                    text = if (isDownloading) {
-                                        stringResource(R.string.status_downloading)
-                                    } else {
-                                        stringResource(R.string.not_available_locally)
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-                }
+                // Availability is already shown over the cover. Keeping the card
+                // footer metadata-only avoids a blank row beneath normal books.
             }
         }
     }
@@ -1352,7 +1302,7 @@ fun DefaultTopAppBar(
 
 @Suppress("KotlinConstantConditions")
 @Composable
-private fun AppDrawerContent(
+internal fun AppDrawerContent(
     uiState: ReaderScreenState,
     onSignInClick: () -> Unit,
     onSignOutClick: () -> Unit,
@@ -1363,7 +1313,11 @@ private fun AppDrawerContent(
     onAiSettingsClick: () -> Unit,
     onSettingsClick: () -> Unit,
     navController: NavHostController,
-    onFolderSyncToggle: (Boolean) -> Unit
+    onFolderSyncToggle: (Boolean) -> Unit,
+    onAboutClick: (() -> Unit)? = null,
+    showFonts: Boolean = true,
+    showAiSettings: Boolean = true,
+    showSupportProject: Boolean = false,
 ) {
     val isOss = BuildConfig.FLAVOR == "oss"
 
@@ -1532,15 +1486,27 @@ private fun AppDrawerContent(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
             )
 
-            NavigationDrawerItem(
-                icon = { Icon(painterResource(id = R.drawable.fonts), contentDescription = null) },
-                label = { Text(stringResource(R.string.drawer_custom_fonts)) },
-                selected = false,
-                onClick = onFontsClick,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-            )
+            onAboutClick?.let { onClick ->
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Default.Info, contentDescription = null) },
+                    label = { Text(stringResource(R.string.about_title)) },
+                    selected = false,
+                    onClick = onClick,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
 
-            if (isOss && !BuildConfig.IS_OFFLINE) {
+            if (showFonts) {
+                NavigationDrawerItem(
+                    icon = { Icon(painterResource(id = R.drawable.fonts), contentDescription = null) },
+                    label = { Text(stringResource(R.string.drawer_custom_fonts)) },
+                    selected = false,
+                    onClick = onFontsClick,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+
+            if (showAiSettings && isOss && !BuildConfig.IS_OFFLINE) {
                 NavigationDrawerItem(
                     icon = { Icon(painterResource(id = R.drawable.ai), contentDescription = null) },
                     label = { Text(stringResource(R.string.ai_settings_title)) },
@@ -1550,12 +1516,12 @@ private fun AppDrawerContent(
                 )
             }
 
-            if (isOss) {
+            if (isOss || showSupportProject) {
                 NavigationDrawerItem(
                     icon = { Icon(Icons.Outlined.FavoriteBorder, contentDescription = null) },
                     label = { Text(stringResource(R.string.drawer_support_project)) },
                     selected = false,
-                    onClick = { navController.navigate(AppDestinations.SUPPORT_PROJECT_SCREEN_ROUTE) },
+                    onClick = { navController.navigateIfReady(AppDestinations.SUPPORT_PROJECT_SCREEN_ROUTE) },
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
             }
@@ -1564,7 +1530,7 @@ private fun AppDrawerContent(
                 icon = { Icon(painterResource(id = R.drawable.feedback), contentDescription = null) },
                 label = { Text(stringResource(R.string.drawer_help_feedback)) },
                 selected = false,
-                onClick = { navController.navigate("feedback_screen_route") },
+                onClick = { navController.navigateIfReady(AppDestinations.FEEDBACK_SCREEN_ROUTE) },
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
             )
 
@@ -1583,7 +1549,7 @@ private fun AppDrawerContent(
             Spacer(modifier = Modifier.weight(1f))
 
             // legal links
-            if (uiState.currentUser != null || (isOss && !BuildConfig.IS_OFFLINE)) {
+            run {
                 val uriHandler = LocalUriHandler.current
                 val baseStyle = MaterialTheme.typography.labelMedium
                 var scaledTextStyle by remember { mutableStateOf(baseStyle) }

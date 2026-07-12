@@ -11,7 +11,8 @@ data class SharedPdfSearchResult(
     val pageIndex: Int,
     val preview: String,
     val matchIndex: Int,
-    val matchLength: Int = 0
+    val matchLength: Int = 0,
+    val boundsList: List<PdfPageBounds> = emptyList()
 )
 
 @Serializable
@@ -25,6 +26,25 @@ data class SharedPdfBookmark(
 data class SharedPdfBookmarkStore(
     val version: Int = 1,
     val bookmarks: List<SharedPdfBookmark> = emptyList()
+)
+
+@Serializable
+data class SharedPdfReaderStore(
+    val version: Int = 1,
+    val pageIndex: Int = 0,
+    val pageCount: Int = 0,
+    val displayMode: PdfDisplayMode = PdfDisplayMode.PAGINATION,
+    val themeId: String = "no_theme",
+    val zoom: Float = PdfZoomSpec().default,
+    val selectedTool: PdfInkTool = PdfInkTool.NONE,
+    val selectedColorArgb: Int = SharedPdfAnnotationDefaults.configFor(PdfInkTool.NONE).colorArgb,
+    val strokeWidth: Float = SharedPdfAnnotationDefaults.configFor(PdfInkTool.NONE).strokeWidth,
+    val isTextSelectionMode: Boolean = false,
+    val bookmarks: List<SharedPdfBookmark> = emptyList(),
+    val annotations: List<SharedPdfAnnotation> = emptyList(),
+    val penPalette: List<Int> = SharedPdfAnnotationDefaults.penPalette,
+    val lastActivePenTool: PdfInkTool = PdfInkTool.PEN,
+    val lastActiveHighlighterTool: PdfInkTool = PdfInkTool.HIGHLIGHTER
 )
 
 object SharedPdfBookmarkSerializer {
@@ -44,6 +64,59 @@ object SharedPdfBookmarkSerializer {
             json.decodeFromString<SharedPdfBookmarkStore>(raw).bookmarks
         }.getOrElse {
             runCatching { json.decodeFromString<List<SharedPdfBookmark>>(raw) }.getOrDefault(emptyList())
+        }
+    }
+}
+
+object SharedPdfReaderStateSerializer {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        prettyPrint = true
+        encodeDefaults = true
+    }
+
+    fun encode(state: SharedPdfReaderState): String {
+        return json.encodeToString(
+            SharedPdfReaderStore(
+                pageIndex = state.pageIndex,
+                pageCount = state.pageCount,
+                displayMode = state.displayMode,
+                themeId = state.themeId,
+                zoom = state.zoom,
+                selectedTool = state.selectedTool,
+                selectedColorArgb = state.selectedColorArgb,
+                strokeWidth = state.strokeWidth,
+                isTextSelectionMode = state.isTextSelectionMode,
+                bookmarks = state.bookmarks,
+                annotations = state.annotations,
+                penPalette = state.penPalette,
+                lastActivePenTool = state.lastActivePenTool,
+                lastActiveHighlighterTool = state.lastActiveHighlighterTool
+            )
+        )
+    }
+
+    fun decode(raw: String?, fallbackPageCount: Int = 1, fallbackPageIndex: Int = 0): SharedPdfReaderState? {
+        if (raw.isNullOrBlank()) return null
+        val store = runCatching { json.decodeFromString<SharedPdfReaderStore>(raw) }.getOrNull()
+            ?: return null
+        return SharedPdfReaderState(
+            pageIndex = store.pageIndex,
+            pageCount = store.pageCount.takeIf { it > 0 } ?: fallbackPageCount,
+            displayMode = store.displayMode,
+            themeId = store.themeId,
+            zoom = store.zoom,
+            selectedTool = store.selectedTool,
+            selectedColorArgb = store.selectedColorArgb,
+            strokeWidth = store.strokeWidth,
+            isTextSelectionMode = store.isTextSelectionMode,
+            bookmarks = store.bookmarks,
+            annotations = store.annotations,
+            penPalette = store.penPalette,
+            lastActivePenTool = store.lastActivePenTool,
+            lastActiveHighlighterTool = store.lastActiveHighlighterTool
+        ).coerced().let { state ->
+            if (state.pageCount > 0) state else state.copy(pageIndex = fallbackPageIndex)
         }
     }
 }
@@ -174,6 +247,7 @@ data class SharedPdfReaderState(
     val pageIndex: Int = 0,
     val pageCount: Int = 0,
     val displayMode: PdfDisplayMode = PdfDisplayMode.PAGINATION,
+    val themeId: String = "no_theme",
     val zoom: Float = PdfZoomSpec().default,
     val isSearchActive: Boolean = false,
     val showSearchResultsPanel: Boolean = true,
@@ -250,6 +324,7 @@ sealed interface SharedPdfReaderAction {
     data object LastPage : SharedPdfReaderAction
     data class DisplayModeChanged(val mode: PdfDisplayMode) : SharedPdfReaderAction
     data object DisplayModeToggled : SharedPdfReaderAction
+    data class ThemeChanged(val themeId: String) : SharedPdfReaderAction
     data class ZoomChanged(val zoom: Float) : SharedPdfReaderAction
     data class ZoomBy(val delta: Float) : SharedPdfReaderAction
     data class SearchChanged(val query: String) : SharedPdfReaderAction
@@ -306,6 +381,7 @@ fun SharedPdfReaderState.reduce(
                 PdfDisplayMode.VERTICAL_SCROLL -> PdfDisplayMode.PAGINATION
             }
         )
+        is SharedPdfReaderAction.ThemeChanged -> copy(themeId = action.themeId.ifBlank { "no_theme" })
         is SharedPdfReaderAction.ZoomChanged -> copy(zoom = zoomSpec.clamp(action.zoom))
         is SharedPdfReaderAction.ZoomBy -> copy(zoom = zoomSpec.clamp(zoom + action.delta))
         is SharedPdfReaderAction.SearchChanged -> {

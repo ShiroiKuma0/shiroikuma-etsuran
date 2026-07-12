@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -384,12 +385,16 @@ class ContentStyler(
 
             val finalParagraphStyle = ParagraphStyle(
                 textAlign = finalTextAlign,
-                textDirection = mergedParagraphStyle.textDirection,
+                textDirection = mergedParagraphStyle.textDirection.takeUnless {
+                    it == TextDirection.Unspecified
+                } ?: TextDirection.ContentOrLtr,
                 lineHeight = finalLineHeight,
                 textIndent = mergedParagraphStyle.textIndent,
                 platformStyle = mergedParagraphStyle.platformStyle,
                 lineHeightStyle = mergedParagraphStyle.lineHeightStyle,
-                lineBreak = LineBreak.Paragraph,
+                // Keep text within the measured page on device/font combinations where the
+                // high-quality breaker can leave a long token wider than its constraints.
+                lineBreak = LineBreak.Simple,
                 hyphens = hyphensValue,
                 textMotion = mergedParagraphStyle.textMotion
             )
@@ -511,7 +516,7 @@ class ContentStyler(
                 }
             }
         }
-        if (block.spans.any { !it.linkHref.isNullOrBlank() }) {
+        if (READER_LINK_DIAGNOSTICS_ENABLED && block.spans.any { !it.linkHref.isNullOrBlank() }) {
             Timber.tag(TAG_PAGINATED_LINK_DIAG).d(
                 "style_text_block type=${block::class.simpleName ?: "Text"} " +
                     "block=${block.blockIndex} cfi=${block.cfi} " +

@@ -201,6 +201,20 @@ private fun WebView.releaseReaderResources() {
     }
 }
 
+internal data class ReaderWebViewViewportPolicy(
+    val useWideViewPort: Boolean = false,
+    val loadWithOverviewMode: Boolean = false
+)
+
+internal val readerResponsiveViewportPolicy = ReaderWebViewViewportPolicy()
+
+internal fun WebSettings.applyReaderResponsiveViewportPolicy(
+    policy: ReaderWebViewViewportPolicy = readerResponsiveViewportPolicy
+) {
+    useWideViewPort = policy.useWideViewPort
+    loadWithOverviewMode = policy.loadWithOverviewMode
+}
+
 private fun getFontCssInjection(): String {
     return """
         @font-face { font-family: 'Merriweather'; src: url('file:///android_asset/fonts/merriweather.ttf'); }
@@ -1116,9 +1130,7 @@ fun ChapterWebView(
                                 view?.evaluateJavascript(js) { result ->
                                     val chunkIdx = result?.toIntOrNull() ?: -1
                                     if (chunkIdx >= 0) {
-                                        for (i in 0..chunkIdx) {
-                                            onChunkRequested(i)
-                                        }
+                                        onChunkRequested(chunkIdx)
                                         val scrollJs = """
                                             (function() {
                                                 var chunkIndex = $chunkIdx;
@@ -1201,8 +1213,7 @@ fun ChapterWebView(
                         setSupportZoom(false)
                         builtInZoomControls = false
                         displayZoomControls = false
-                        useWideViewPort = true
-                        loadWithOverviewMode = true
+                        applyReaderResponsiveViewportPolicy()
                     }
                     isVerticalScrollBarEnabled = false
                     isHorizontalScrollBarEnabled = false

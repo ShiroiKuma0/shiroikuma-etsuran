@@ -32,6 +32,8 @@ enum class RenderMode {
 
 enum class SortOrder {
     RECENT,
+    DATE_ADDED_NEWEST,
+    DATE_ADDED_OLDEST,
     TITLE_ASC,
     AUTHOR_ASC,
     PERCENT_ASC,
@@ -101,7 +103,9 @@ data class BookItem(
     val readerBookmarks: List<ReaderBookmark> = emptyList(),
     val readerHighlights: List<UserHighlight> = emptyList(),
     val pdfReaderViewport: SharedPdfReaderViewport? = null,
-    val readingPositionModifiedTimestamp: Long = 0L
+    val readingPositionModifiedTimestamp: Long = 0L,
+    /** A local user-provided name that takes precedence only when sorting by title. */
+    val titleSortKey: String? = null
 )
 
 data class Shelf(

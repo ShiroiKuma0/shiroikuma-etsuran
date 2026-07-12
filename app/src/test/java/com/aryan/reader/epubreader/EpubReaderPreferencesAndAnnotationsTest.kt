@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import com.aryan.reader.countWords
 import com.aryan.reader.epub.EpubChapter
 import io.mockk.every
 import io.mockk.mockk
@@ -198,18 +199,22 @@ class EpubReaderPreferencesAndAnnotationsTest {
         val prefs = TestSharedPreferences()
         val context = contextWithPrefs(SETTINGS_PREFS_NAME to prefs)
 
-        saveHighlightPalette(context, listOf(HighlightColor.CYAN, HighlightColor.MAGENTA, HighlightColor.LIME, HighlightColor.PINK).map { it.color.toArgb() })
+        val customPalette = listOf(
+            HighlightColor.CYAN,
+            HighlightColor.MAGENTA,
+            HighlightColor.LIME,
+            HighlightColor.PINK
+        ).map { it.color.toArgb() }
 
-        assertEquals(
-            listOf(HighlightColor.CYAN, HighlightColor.MAGENTA, HighlightColor.LIME, HighlightColor.PINK),
-            loadHighlightPalette(context)
-        )
+        saveHighlightPalette(context, customPalette)
+
+        assertEquals(customPalette, loadHighlightPalette(context))
 
         val invalidContext = contextWithPrefs(
             SETTINGS_PREFS_NAME to TestSharedPreferences("highlight_palette_ids" to "yellow,unknown,blue")
         )
         assertEquals(
-            listOf(HighlightColor.YELLOW, HighlightColor.GREEN, HighlightColor.BLUE, HighlightColor.RED),
+            listOf(HighlightColor.YELLOW, HighlightColor.GREEN, HighlightColor.BLUE, HighlightColor.RED).map { it.color.toArgb() },
             loadHighlightPalette(invalidContext)
         )
     }
@@ -236,6 +241,18 @@ class EpubReaderPreferencesAndAnnotationsTest {
         assertEquals(HighlightColor.YELLOW, parseHighlightsJson(unknownColorJson).single().color)
         assertEquals(emptyList<UserHighlight>(), parseHighlightsJson("{broken"))
         assertEquals(emptyList<UserHighlight>(), parseHighlightsJson(null))
+    }
+
+    @Test
+    fun `countWords counts whitespace separated words without regex allocation`() {
+        assertEquals(0, countWords(" \t\n "))
+        assertEquals(1, countWords("word"))
+        assertEquals(3, countWords(" one\ttwo\nthree "))
+
+        val source = java.io.File("app/src/main/java/com/aryan/reader/Common.kt")
+            .takeIf { it.isFile }
+            ?: java.io.File("src/main/java/com/aryan/reader/Common.kt")
+        assertFalse(source.readText().contains("split(Regex("))
     }
 
     @Test
@@ -328,7 +345,7 @@ class EpubReaderPreferencesAndAnnotationsTest {
             .put("snippet", "Valid")
             .put("chapterIndex", 0)
             .toString()
-        val malformed = "{\"cfi\":\"/broken\""
+        val malformed = """{"cfi":"/broken"""
         val context = contextWithPrefs()
 
         val bookmarks = loadBookmarks(context, "Book", listOf(chapter("Chapter")), JSONArray(listOf(valid, malformed)).toString())

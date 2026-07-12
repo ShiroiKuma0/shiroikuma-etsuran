@@ -142,13 +142,24 @@ class LibraryStateProjectorTest {
             recentFile("bravo", title = "Bravo", author = "Asimov", timestamp = 2L, progressPercentage = 90f, fileSize = 200L)
         )
 
-        assertEquals(listOf("charlie", "bravo", "alpha"), sortFiles(files, SortOrder.RECENT).ids())
+        assertEquals(listOf("charlie", "bravo", "alpha"), sortFiles(files, SortOrder.DATE_ADDED_NEWEST).ids())
         assertEquals(listOf("alpha", "bravo", "charlie"), sortFiles(files, SortOrder.TITLE_ASC).ids())
         assertEquals(listOf("bravo", "alpha", "charlie"), sortFiles(files, SortOrder.AUTHOR_ASC).ids())
         assertEquals(listOf("alpha", "charlie", "bravo"), sortFiles(files, SortOrder.PERCENT_ASC).ids())
         assertEquals(listOf("bravo", "charlie", "alpha"), sortFiles(files, SortOrder.PERCENT_DESC).ids())
         assertEquals(listOf("alpha", "bravo", "charlie"), sortFiles(files, SortOrder.SIZE_ASC).ids())
         assertEquals(listOf("charlie", "bravo", "alpha"), sortFiles(files, SortOrder.SIZE_DESC).ids())
+    }
+
+    @Test
+    fun `title sort uses a user renamed book name instead of stale embedded metadata`() {
+        val files = listOf(
+            recentFile("one", title = "C", customName = "01"),
+            recentFile("two", title = "A", customName = "02"),
+            recentFile("three", title = "B", customName = "03")
+        )
+
+        assertEquals(listOf("one", "two", "three"), sortFiles(files, SortOrder.TITLE_ASC).ids())
     }
 
     @Test
